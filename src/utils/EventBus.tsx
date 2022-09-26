@@ -12,44 +12,43 @@ export default class EventBus {
   private static topicMap = new Map<string, BusSet>();
 
   /**
-   * 订阅事件
-   * @param topic 主题
-   * @param listener 监听
-   * @returns 是否拦截事件传递，返回true，则后续的订阅都接收不到
+   * Subscribe topic. Don't forget call remove().
+   * @param topic Event topic
+   * @param listener
+   * @returns boolean Whether to intercept event delivery, if it returns true, subsequent subscriptions will not receive it
    */
   public static on<T>(
     topic: string,
     listener: (event: T) => boolean | Promise<boolean>
-  ): Bus | undefined {
+  ): Bus {
     if (!EventBus.topicMap.has(topic)) {
       EventBus.topicMap.set(topic, { callBackSet: new Set<CallBack>() });
     }
     const bus = EventBus.topicMap.get(topic);
-    if (bus) {
-      bus.callBackSet.add(listener);
-      return {
-        remove: () => {
-          const b = EventBus.topicMap.get(topic);
-          b && b.callBackSet.delete(listener);
-        },
-      };
-    }
-    return undefined;
+    bus!.callBackSet.add(listener);
+    return {
+      remove: () => {
+        const b = EventBus.topicMap.get(topic);
+        b && b.callBackSet.delete(listener);
+      },
+    };
   }
 
   /**
-   * 发布事件
-   * @param topic 主题
-   * @param event 事件
+   * Emit event by topic
+   * @param topic string
+   * @param event any object
    */
   public static async emit(topic: string, event: any) {
     const bus = EventBus.topicMap.get(topic);
     if (bus) {
       for (let callback of bus.callBackSet) {
-        const interceptor = await callback(event);
-        if (interceptor) {
-          return true;
-        }
+        try {
+          const interceptor = await callback(event);
+          if (interceptor) {
+            return true;
+          }
+        } catch (e) {}
       }
       return true;
     }
@@ -57,8 +56,8 @@ export default class EventBus {
   }
 
   /**
-   * 移除该主题下的所有监听，会将其topic对应下的所有listener都清掉
-   * @param topic 主题
+   * Removing all listeners under the topic.
+   * @param topic string
    */
   public static off(topic: string) {
     return EventBus.topicMap.delete(topic);

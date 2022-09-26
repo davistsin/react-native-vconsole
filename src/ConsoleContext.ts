@@ -1,5 +1,5 @@
 import React from 'react';
 
-export const ConsoleContext = React.createContext<{
-  hide?: () => void;
-}>({});
+export const ConsoleContext = React.createContext({
+  hide: () => {},
+});

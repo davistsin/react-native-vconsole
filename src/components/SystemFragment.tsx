@@ -1,5 +1,13 @@
 import React, { Component } from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import {
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+  NativeModules,
+} from 'react-native';
+
+const { Vconsole } = NativeModules;
 
 interface SystemFragmentProps {
   width: number;
@@ -11,16 +19,29 @@ export default class SystemFragment extends Component<
   SystemFragmentProps,
   SystemFragmentState
 > {
+  showDevMenu = () => {
+    Vconsole.showDevOptionsDialog();
+  };
+  reloadApp = () => {
+    if (__DEV__) {
+    }
+  };
+  renderButton(title: string, onPress: () => void) {
+    return (
+      <TouchableOpacity
+        style={styles.button}
+        activeOpacity={0.7}
+        onPress={onPress}
+      >
+        <Text style={styles.buttonText}>{title}</Text>
+      </TouchableOpacity>
+    );
+  }
   render() {
     return (
       <View style={[styles.container, { width: this.props.width }]}>
-        <TouchableOpacity
-          style={styles.button}
-          activeOpacity={0.7}
-          onPress={() => {}}
-        >
-          <Text style={styles.buttonText}>Developer Menu</Text>
-        </TouchableOpacity>
+        {__DEV__ && this.renderButton('Developer Menu', this.showDevMenu)}
+        {this.renderButton('Reload app', this.reloadApp)}
       </View>
     );
   }

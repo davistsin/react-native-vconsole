@@ -23,7 +23,7 @@ export default class LogFragment extends Component<
 > {
   static contextType = ConsoleContext;
 
-  private bus: Bus | undefined;
+  private bus: Bus;
   constructor(props: LogFragmentProps) {
     super(props);
     this.trackConsole();
@@ -51,7 +51,7 @@ export default class LogFragment extends Component<
   }
 
   componentWillUnmount() {
-    this.bus?.remove();
+    this.bus.remove();
   }
 
   trackConsole = () => {
