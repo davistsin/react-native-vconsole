@@ -56,7 +56,7 @@ export default function App() {
 | groupCollapsed | -       |
 | groupEnd       | -       |
 | info           | ing     |
-| log            | ✅       |
+| log            | ✅     |
 | memory         | -       |
 | profile        | -       |
 | profileEnd     | -       |
@@ -77,8 +77,8 @@ In programing.
 
 | Button         | support |
 |:---------------|:--------|
-| Developer Menu | ing     |
-| Relaunch       | ing     |
+| Developer Menu | ✅     |
+| Restart app    | ✅     |
 
 Contributing
 
