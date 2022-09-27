@@ -22,9 +22,8 @@ export default class SystemFragment extends Component<
   showDevMenu = () => {
     Vconsole.showDevOptionsDialog();
   };
-  reloadApp = () => {
-    if (__DEV__) {
-    }
+  restart = () => {
+    Vconsole.restartApp();
   };
   renderButton(title: string, onPress: () => void) {
     return (
@@ -41,7 +40,7 @@ export default class SystemFragment extends Component<
     return (
       <View style={[styles.container, { width: this.props.width }]}>
         {__DEV__ && this.renderButton('Developer Menu', this.showDevMenu)}
-        {this.renderButton('Reload app', this.reloadApp)}
+        {this.renderButton('Restart app', this.restart)}
       </View>
     );
   }
