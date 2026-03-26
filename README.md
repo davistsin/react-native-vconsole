@@ -44,10 +44,14 @@ export default function App() {
 - Draggable floating button (`vConsole`) with screen-boundary constraints.
 - Bottom sheet panel (7/9 screen height) with `Log / Network / System / App` tabs.
 - Log tab captures `console.log/info/warn/error` without breaking original console behavior.
+- Log tab supports keyword filter (debounced) across log text content.
 - Network tab captures `XMLHttpRequest` requests/responses without breaking original request behavior.
-- System/App tabs read info from native module bridges (`NativeModules.Vconsole`).
+- Network tab supports `Retry`, which replays a request with the original method/url/headers/body (excluding unsafe forbidden headers).
+- Network tab supports keyword filter (debounced) by request URL.
+- System/App tabs read info from native module bridges (`NativeModules.Vconsole`). Display System/App infomation.
 
-![snapshot](./docs/snapshot/Simulator%20Screenshot%20-%20iPhone%2017%20Pro.png)
+<img src="./docs/snapshot/Simulator Screenshot - iPhone 17 Pro - 2026-03-27 at 01.22.36.png" width="360">
+<img src="./docs/snapshot/Simulator Screenshot - iPhone 17 Pro - 2026-03-27 at 01.22.57.png" width="360">
 
 ## Contributing
 
