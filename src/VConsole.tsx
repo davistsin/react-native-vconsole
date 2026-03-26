@@ -4,10 +4,12 @@ import {
   Clipboard,
   Dimensions,
   FlatList,
+  Keyboard,
   NativeModules,
   PanResponder,
   Platform,
   Pressable,
+  TextInput,
   StatusBar,
   StyleSheet,
   Text,
@@ -359,6 +361,11 @@ export function VConsole({
   const [logSubTab, setLogSubTab] = useState<LogFilterTab>('All');
   const [logEntries, setLogEntries] = useState<LogEntry[]>([]);
   const [networkEntries, setNetworkEntries] = useState<NetworkEntry[]>([]);
+  const [logFilterInput, setLogFilterInput] = useState('');
+  const [networkFilterInput, setNetworkFilterInput] = useState('');
+  const [debouncedLogFilter, setDebouncedLogFilter] = useState('');
+  const [debouncedNetworkFilter, setDebouncedNetworkFilter] = useState('');
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [expandedMap, setExpandedMap] = useState<ExpandedMap>({});
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
@@ -425,6 +432,39 @@ export function VConsole({
     }
   }, [activeTab, appInfo, nativeModule, panelVisible, systemInfo]);
 
+  useEffect(() => {
+    const showEvent =
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent =
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const showSubscription = Keyboard.addListener(showEvent, (event) => {
+      setKeyboardHeight(event.endCoordinates?.height ?? 0);
+    });
+    const hideSubscription = Keyboard.addListener(hideEvent, () => {
+      setKeyboardHeight(0);
+    });
+
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
+  }, []);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedLogFilter(logFilterInput);
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [logFilterInput]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedNetworkFilter(networkFilterInput);
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [networkFilterInput]);
+
   const panResponder = useMemo(
     () =>
       PanResponder.create({
@@ -478,15 +518,36 @@ export function VConsole({
     });
   };
 
+  const normalizedLogFilter = debouncedLogFilter.trim().toLowerCase();
+  const normalizedNetworkFilter = debouncedNetworkFilter.trim().toLowerCase();
+
+  const filteredLogEntries = useMemo(() => {
+    if (!normalizedLogFilter) {
+      return logEntries;
+    }
+    return logEntries.filter((item) =>
+      item.text.toLowerCase().includes(normalizedLogFilter)
+    );
+  }, [logEntries, normalizedLogFilter]);
+
+  const filteredNetworkEntries = useMemo(() => {
+    if (!normalizedNetworkFilter) {
+      return networkEntries;
+    }
+    return networkEntries.filter((item) =>
+      item.url.toLowerCase().includes(normalizedNetworkFilter)
+    );
+  }, [networkEntries, normalizedNetworkFilter]);
+
   const logDataByTab = useMemo(
     () => ({
-      All: logEntries,
-      log: logEntries.filter((item) => item.level === 'log'),
-      info: logEntries.filter((item) => item.level === 'info'),
-      warn: logEntries.filter((item) => item.level === 'warn'),
-      error: logEntries.filter((item) => item.level === 'error'),
+      All: filteredLogEntries,
+      log: filteredLogEntries.filter((item) => item.level === 'log'),
+      info: filteredLogEntries.filter((item) => item.level === 'info'),
+      warn: filteredLogEntries.filter((item) => item.level === 'warn'),
+      error: filteredLogEntries.filter((item) => item.level === 'error'),
     }),
-    [logEntries]
+    [filteredLogEntries]
   );
 
   const onToggleNode = (key: string) => {
@@ -750,6 +811,16 @@ export function VConsole({
           </View>
         ))}
       </View>
+      <View style={styles.filterInputWrap}>
+        <TextInput
+          style={styles.filterInput}
+          textAlignVertical="center"
+          value={logFilterInput}
+          onChangeText={setLogFilterInput}
+          placeholder="filter..."
+          placeholderTextColor="#999999"
+        />
+      </View>
       <View style={styles.actionsRow}>
         {renderActionButton('Clear', () => {
           clearLogEntries();
@@ -766,11 +837,20 @@ export function VConsole({
     <View style={[styles.contentArea, visible ? {} : styles.hidden]}>
       <FlatList
         ref={networkListRef}
-        data={networkEntries}
+        data={filteredNetworkEntries}
         keyExtractor={(item) => `network-${item.id}`}
         renderItem={renderNetworkItem}
         ItemSeparatorComponent={ListSeparator}
       />
+      <View style={styles.filterInputWrap}>
+        <TextInput
+          style={styles.filterInput}
+          value={networkFilterInput}
+          onChangeText={setNetworkFilterInput}
+          placeholder="filter"
+          placeholderTextColor="#999999"
+        />
+      </View>
       <View style={styles.actionsRow}>
         {renderActionButton('Clear', () => {
           clearNetworkEntries();
@@ -863,6 +943,7 @@ export function VConsole({
               styles.panel,
               {
                 height: panelHeight,
+                marginBottom: keyboardHeight,
                 transform: [{ translateY: panelTranslateY }],
               },
             ]}
@@ -1095,6 +1176,24 @@ const styles = StyleSheet.create({
   networkErrorText: {
     color: LOG_THEME.error.color,
     fontSize: 12,
+  },
+  filterInputWrap: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#E1E1E1',
+    paddingHorizontal: 8,
+    paddingTop: 8,
+    paddingBottom: 6,
+  },
+  filterInput: {
+    height: 34,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#D0D0D0',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    fontSize: 12,
+    color: '#222222',
+    backgroundColor: '#FFFFFF',
+    paddingVertical: 0,
   },
   actionsRow: {
     borderTopWidth: StyleSheet.hairlineWidth,
