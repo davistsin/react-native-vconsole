@@ -1,0 +1,58 @@
+import { useEffect } from 'react';
+import { Button, SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import { VConsole } from 'react-native-vconsole';
+
+export default function App() {
+  useEffect(() => {
+    console.log('vConsole mounted', { from: 'example app' });
+    console.info('console.info message');
+    console.warn('console.warn message');
+    console.error('console.error message');
+  }, []);
+
+  const sendNetworkRequest = async () => {
+    try {
+      await fetch('TODO write your network request url here', {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+        },
+      });
+    } catch (error) {
+      console.error('network request failed', error);
+    }
+  };
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <View style={styles.content}>
+        <Text style={styles.title}>react-native-vconsole example</Text>
+        <Button
+          title="Generate Logs"
+          onPress={() => console.log({ nested: { hello: 'world' } })}
+        />
+        <View style={styles.spacer} />
+        <Button title="Send Network Request" onPress={sendNetworkRequest} />
+      </View>
+      <VConsole enable={true} exclude={['localhost:8081']} />
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+  },
+  content: {
+    flex: 1,
+    padding: 16,
+  },
+  title: {
+    fontSize: 18,
+    fontWeight: '600',
+    marginBottom: 16,
+  },
+  spacer: {
+    height: 12,
+  },
+});
