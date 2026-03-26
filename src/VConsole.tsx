@@ -617,6 +617,11 @@ export function VConsole({
     item,
   }) => {
     const isError = isNetworkErrorEntry(item);
+    const startedTime = formatLogTime(item.startedAt);
+    const finishedTime =
+      typeof item.finishedAt === 'number'
+        ? formatLogTime(item.finishedAt)
+        : '-';
     return (
       <View
         style={[
@@ -629,11 +634,13 @@ export function VConsole({
             {item.method} {item.url}
           </Text>
           <Text style={styles.networkLabel}>
-            Status: {item.status ?? '-'}
+            Time: {startedTime}
+            {finishedTime !== '-' ? ` ~ ${finishedTime}` : ''}
             {'   '}
             Duration:{' '}
             {typeof item.durationMs === 'number' ? `${item.durationMs}ms` : '-'}
           </Text>
+          <Text style={styles.networkLabel}>Status: {item.status ?? '-'}</Text>
           <View style={styles.networkBlock}>
             <Text style={styles.networkLabel}>Request Headers</Text>
             <ObjectTree
