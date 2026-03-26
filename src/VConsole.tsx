@@ -157,6 +157,76 @@ function buildNetworkCopyText(item: NetworkEntry): string {
   return segments.join('\n');
 }
 
+const FORBIDDEN_RETRY_HEADERS = new Set([
+  'host',
+  'content-length',
+  'accept-encoding',
+  'connection',
+  'origin',
+  'referer',
+]);
+
+function normalizeRetryUrl(rawUrl: string): string {
+  if (!rawUrl) {
+    return '';
+  }
+  if (/^\/\//.test(rawUrl)) {
+    return `https:${rawUrl}`;
+  }
+  return rawUrl;
+}
+
+function buildRetryHeaders(
+  headers: Record<string, string> | undefined
+): Record<string, string> {
+  const nextHeaders: Record<string, string> = {};
+  if (!headers) {
+    return nextHeaders;
+  }
+
+  Object.entries(headers).forEach(([key, value]) => {
+    if (!FORBIDDEN_RETRY_HEADERS.has(key.toLowerCase())) {
+      nextHeaders[key] = value;
+    }
+  });
+  return nextHeaders;
+}
+
+function buildRetryBody(payload: unknown, method: string): unknown | undefined {
+  if (method === 'GET' || method === 'HEAD' || payload == null) {
+    return undefined;
+  }
+  if (typeof payload === 'string') {
+    return payload;
+  }
+  if (typeof payload === 'number' || typeof payload === 'boolean') {
+    return String(payload);
+  }
+  if (typeof FormData !== 'undefined' && payload instanceof FormData) {
+    return payload;
+  }
+  if (
+    typeof URLSearchParams !== 'undefined' &&
+    payload instanceof URLSearchParams
+  ) {
+    return payload;
+  }
+  if (typeof Blob !== 'undefined' && payload instanceof Blob) {
+    return payload;
+  }
+  if (typeof ArrayBuffer !== 'undefined' && payload instanceof ArrayBuffer) {
+    return payload;
+  }
+  if (ArrayBuffer.isView(payload)) {
+    return payload;
+  }
+  try {
+    return JSON.stringify(payload);
+  } catch {
+    return String(payload);
+  }
+}
+
 type ObjectTreeProps = {
   value: unknown;
   nodeKey: string;
@@ -433,6 +503,39 @@ export function VConsole({
     networkListRef.current?.scrollToEnd({ animated: true });
   };
 
+  const retryNetworkRequest = (item: NetworkEntry) => {
+    const method = (item.method || 'GET').toUpperCase();
+    const url = normalizeRetryUrl(item.url);
+    if (!url) {
+      console.error('[vConsole] Retry failed: empty request URL');
+      return;
+    }
+
+    const headers = buildRetryHeaders(item.requestHeaders);
+    const body = buildRetryBody(item.requestBody, method);
+    const hasContentType = Object.keys(headers).some(
+      (key) => key.toLowerCase() === 'content-type'
+    );
+
+    if (
+      body &&
+      typeof body === 'string' &&
+      typeof item.requestBody === 'object' &&
+      item.requestBody !== null &&
+      !hasContentType
+    ) {
+      headers['Content-Type'] = 'application/json';
+    }
+
+    fetch(url, {
+      method,
+      headers,
+      body: body as never,
+    }).catch((error: unknown) => {
+      console.error('[vConsole] Retry request failed', error);
+    });
+  };
+
   const renderRootTab = (tab: VConsoleTab) => (
     <Pressable
       key={tab}
@@ -578,6 +681,12 @@ export function VConsole({
           }
         >
           <Text style={styles.copyButtonText}>Copy</Text>
+        </Pressable>
+        <Pressable
+          style={styles.retryButton}
+          onPress={() => retryNetworkRequest(item)}
+        >
+          <Text style={styles.retryButtonText}>Retry</Text>
         </Pressable>
       </View>
     );
@@ -881,6 +990,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
   },
   copyButtonText: {
+    fontSize: 11,
+    color: '#333333',
+  },
+  retryButton: {
+    position: 'absolute',
+    right: 8,
+    top: 40,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#D0D0D0',
+    borderRadius: 6,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+  },
+  retryButtonText: {
     fontSize: 11,
     color: '#333333',
   },

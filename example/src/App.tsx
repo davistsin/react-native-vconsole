@@ -15,7 +15,8 @@ export default function App() {
       await fetch('https://jsonplaceholder.typicode.com/posts/1', {
         method: 'GET',
         headers: {
-          Accept: 'application/json',
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
         },
       });
     } catch (error) {
