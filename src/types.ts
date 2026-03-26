@@ -17,6 +17,8 @@ export interface NetworkEntry {
   method: string;
   url: string;
   status?: number;
+  isError?: boolean;
+  errorReason?: string;
   startedAt: number;
   finishedAt?: number;
   durationMs?: number;

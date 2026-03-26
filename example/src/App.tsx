@@ -12,7 +12,7 @@ export default function App() {
 
   const sendNetworkRequest = async () => {
     try {
-      await fetch('TODO write your network request url here', {
+      await fetch('https://jsonplaceholder.typicode.com/posts/1', {
         method: 'GET',
         headers: {
           Accept: 'application/json',

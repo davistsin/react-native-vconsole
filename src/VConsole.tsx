@@ -102,6 +102,18 @@ function formatMemorySize(bytes: unknown): string {
   return `${mb.toFixed(2)} MB`;
 }
 
+function formatLogTime(timestamp: number): string {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) {
+    return '--:--:--.---';
+  }
+  const hh = String(date.getHours()).padStart(2, '0');
+  const mm = String(date.getMinutes()).padStart(2, '0');
+  const ss = String(date.getSeconds()).padStart(2, '0');
+  const ms = String(date.getMilliseconds()).padStart(3, '0');
+  return `${hh}:${mm}:${ss}.${ms}`;
+}
+
 function prettyText(value: unknown): string {
   if (value === undefined) {
     return '';
@@ -116,19 +128,33 @@ function prettyText(value: unknown): string {
   }
 }
 
+function isNetworkErrorEntry(item: NetworkEntry): boolean {
+  return item.isError === true;
+}
+
 function buildNetworkCopyText(item: NetworkEntry): string {
   const status = item.status ?? '-';
   const duration =
     typeof item.durationMs === 'number' ? `${item.durationMs}ms` : '-';
+  const isError = isNetworkErrorEntry(item);
 
-  return [
+  const segments = [
     `${item.method} ${item.url}`,
     `status ${status} duration ${duration}`,
     `request headers\n${prettyText(item.requestHeaders)}`,
     `request body\n${prettyText(item.requestBody)}`,
-    `response headers\n${prettyText(item.responseHeaders)}`,
-    `response data\n${prettyText(item.responseData)}`,
-  ].join('\n');
+  ];
+
+  if (isError) {
+    segments.push(
+      `error reason\n${item.errorReason ?? 'Network request failed'}`
+    );
+  } else {
+    segments.push(`response headers\n${prettyText(item.responseHeaders)}`);
+    segments.push(`response data\n${prettyText(item.responseData)}`);
+  }
+
+  return segments.join('\n');
 }
 
 type ObjectTreeProps = {
@@ -445,6 +471,10 @@ export function VConsole({
         <View style={styles.listItemMain}>
           <Text style={[styles.logLevelText, { color: levelTheme.color }]}>
             [{item.level.toUpperCase()}]
+            <Text style={styles.logTimeText}>
+              {' '}
+              {formatLogTime(item.timestamp)}
+            </Text>
           </Text>
           <View style={styles.logPayload}>
             {item.args.map((arg, index) => (
@@ -471,8 +501,14 @@ export function VConsole({
   const renderNetworkItem: FlatListProps<NetworkEntry>['renderItem'] = ({
     item,
   }) => {
+    const isError = isNetworkErrorEntry(item);
     return (
-      <View style={styles.listItem}>
+      <View
+        style={[
+          styles.listItem,
+          isError ? { backgroundColor: LOG_THEME.error.backgroundColor } : null,
+        ]}
+      >
         <View style={styles.listItemMain}>
           <Text style={styles.networkTitle}>
             {item.method} {item.url}
@@ -501,26 +537,39 @@ export function VConsole({
               onToggle={onToggleNode}
             />
           </View>
-          <View style={styles.networkBlock}>
-            <Text style={styles.networkLabel}>Response Headers</Text>
-            <ObjectTree
-              value={item.responseHeaders}
-              nodeKey={`${item.id}.responseHeaders`}
-              expandedMap={expandedMap}
-              onToggle={onToggleNode}
-            />
-          </View>
-          <View style={styles.networkBlock}>
-            <Text style={styles.networkLabel}>Response Data</Text>
-            <ScrollView horizontal={true}>
-              <ObjectTree
-                value={item.responseData ?? ''}
-                nodeKey={`${item.id}.responseData`}
-                expandedMap={expandedMap}
-                onToggle={onToggleNode}
-              />
-            </ScrollView>
-          </View>
+          {isError ? (
+            <View style={styles.networkBlock}>
+              <Text style={[styles.networkLabel, styles.networkErrorLabel]}>
+                Error Reason
+              </Text>
+              <Text style={styles.networkErrorText}>
+                {item.errorReason ?? 'Network request failed'}
+              </Text>
+            </View>
+          ) : (
+            <>
+              <View style={styles.networkBlock}>
+                <Text style={styles.networkLabel}>Response Headers</Text>
+                <ObjectTree
+                  value={item.responseHeaders}
+                  nodeKey={`${item.id}.responseHeaders`}
+                  expandedMap={expandedMap}
+                  onToggle={onToggleNode}
+                />
+              </View>
+              <View style={styles.networkBlock}>
+                <Text style={styles.networkLabel}>Response Data</Text>
+                <ScrollView horizontal={true}>
+                  <ObjectTree
+                    value={item.responseData ?? ''}
+                    nodeKey={`${item.id}.responseData`}
+                    expandedMap={expandedMap}
+                    onToggle={onToggleNode}
+                  />
+                </ScrollView>
+              </View>
+            </>
+          )}
         </View>
         <Pressable
           style={styles.copyButton}
@@ -534,8 +583,8 @@ export function VConsole({
     );
   };
 
-  const renderLogPanel = () => (
-    <View style={styles.contentArea}>
+  const renderLogPanel = (visible: boolean) => (
+    <View style={[styles.contentArea, visible ? {} : styles.hidden]}>
       <View style={styles.subTabRow}>
         {LOG_SUB_TABS.map((tab) => (
           <Pressable
@@ -585,8 +634,8 @@ export function VConsole({
     </View>
   );
 
-  const renderNetworkPanel = () => (
-    <View style={styles.contentArea}>
+  const renderNetworkPanel = (visible: boolean) => (
+    <View style={[styles.contentArea, visible ? {} : styles.hidden]}>
       <FlatList
         ref={networkListRef}
         data={networkEntries}
@@ -606,8 +655,8 @@ export function VConsole({
     </View>
   );
 
-  const renderSystemPanel = () => (
-    <View style={styles.contentArea}>
+  const renderSystemPanel = (visible: boolean) => (
+    <View style={[styles.contentArea, visible ? {} : styles.hidden]}>
       <View style={styles.infoCard}>
         <Text style={styles.infoText}>
           Brand: {systemInfo?.manufacturer ?? '-'}
@@ -642,8 +691,8 @@ export function VConsole({
     </View>
   );
 
-  const renderAppPanel = () => (
-    <View style={styles.contentArea}>
+  const renderAppPanel = (visible: boolean) => (
+    <View style={[styles.contentArea, visible ? {} : styles.hidden]}>
       <View style={styles.infoCard}>
         <Text style={styles.infoText}>
           App Version: {appInfo?.appVersion ?? '-'}
@@ -691,10 +740,10 @@ export function VConsole({
             ]}
           >
             <View style={styles.topTabRow}>{ROOT_TABS.map(renderRootTab)}</View>
-            {activeTab === 'Log' ? renderLogPanel() : null}
-            {activeTab === 'Network' ? renderNetworkPanel() : null}
-            {activeTab === 'System' ? renderSystemPanel() : null}
-            {activeTab === 'App' ? renderAppPanel() : null}
+            {renderLogPanel(activeTab === 'Log')}
+            {renderNetworkPanel(activeTab === 'Network')}
+            {renderSystemPanel(activeTab === 'System')}
+            {renderAppPanel(activeTab === 'App')}
           </Animated.View>
         </View>
       ) : null}
@@ -813,6 +862,11 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     marginBottom: 4,
   },
+  logTimeText: {
+    fontSize: 11,
+    fontWeight: '400',
+    color: '#888888',
+  },
   logPayload: {
     flex: 1,
   },
@@ -891,6 +945,14 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#444444',
     marginBottom: 2,
+  },
+  networkErrorLabel: {
+    color: LOG_THEME.error.color,
+    fontWeight: '600',
+  },
+  networkErrorText: {
+    color: LOG_THEME.error.color,
+    fontSize: 12,
   },
   actionsRow: {
     borderTopWidth: StyleSheet.hairlineWidth,

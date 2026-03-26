@@ -50,6 +50,38 @@ function shouldSkipNetworkCapture(rawUrl: string): boolean {
   return ignoredHosts.has(host);
 }
 
+function getErrorMessage(error: unknown): string | undefined {
+  if (error instanceof Error) {
+    return error.message || error.name;
+  }
+  if (typeof error === 'string') {
+    return error;
+  }
+  return undefined;
+}
+
+function isInvalidHttpUrl(rawUrl: string): boolean {
+  if (!rawUrl) {
+    return true;
+  }
+  if (/^https?:\/\//i.test(rawUrl) || /^\/\//.test(rawUrl)) {
+    return false;
+  }
+  if (rawUrl.startsWith('/')) {
+    return false;
+  }
+  const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(rawUrl);
+  return hasScheme || !rawUrl.includes('/');
+}
+
+function markNetworkError(entry: NetworkEntry, reason: string) {
+  entry.status = entry.status ?? 0;
+  entry.isError = true;
+  entry.errorReason = reason;
+  entry.responseHeaders = {};
+  entry.responseData = undefined;
+}
+
 function notify() {
   const next = [...entries];
   listeners.forEach((listener) => {
@@ -170,10 +202,14 @@ function parseResponseData(
   return xhr.response ?? '';
 }
 
-function parseHeaders(rawHeaders: string): Record<string, string> {
+function parseHeaders(rawHeaders?: string | null): Record<string, string> {
   const result: Record<string, string> = {};
+  if (!rawHeaders) {
+    return result;
+  }
+
   rawHeaders
-    .split('\r\n')
+    .split(/\r?\n/)
     .filter(Boolean)
     .forEach((line) => {
       const splitIndex = line.indexOf(':');
@@ -259,9 +295,26 @@ export function installXhrProxy(options?: InstallXhrProxyOptions) {
 
         const finishedAt = Date.now();
         current.status = this.status;
-        current.finishedAt = finishedAt;
-        current.durationMs = finishedAt - current.startedAt;
-        current.responseHeaders = parseHeaders(this.getAllResponseHeaders());
+        current.finishedAt = current.finishedAt ?? finishedAt;
+        current.durationMs =
+          current.durationMs ?? finishedAt - current.startedAt;
+        if (current.isError) {
+          notify();
+          return;
+        }
+        try {
+          current.responseHeaders = parseHeaders(this.getAllResponseHeaders());
+        } catch {
+          current.responseHeaders = {};
+        }
+        if (this.status === 0) {
+          const reason = isInvalidHttpUrl(this._url)
+            ? `Invalid URL: ${this._url}`
+            : 'Network request failed';
+          markNetworkError(current, reason);
+          notify();
+          return;
+        }
         try {
           const parsedData = parseResponseData(this, current.responseHeaders);
           if (isPromiseLike(parsedData)) {
@@ -285,7 +338,62 @@ export function installXhrProxy(options?: InstallXhrProxyOptions) {
         notify();
       });
 
-      return super.send(body as never);
+      this.addEventListener('timeout', () => {
+        const current = entries.find((item) => item.id === this._entryId);
+        if (!current) {
+          return;
+        }
+        current.finishedAt = current.finishedAt ?? Date.now();
+        current.durationMs =
+          current.durationMs ?? current.finishedAt - current.startedAt;
+        markNetworkError(
+          current,
+          this.timeout > 0
+            ? `Request timeout (${this.timeout}ms)`
+            : 'Request timeout'
+        );
+        notify();
+      });
+
+      this.addEventListener('error', () => {
+        const current = entries.find((item) => item.id === this._entryId);
+        if (!current) {
+          return;
+        }
+        current.finishedAt = current.finishedAt ?? Date.now();
+        current.durationMs =
+          current.durationMs ?? current.finishedAt - current.startedAt;
+        const reason = isInvalidHttpUrl(this._url)
+          ? `Invalid URL: ${this._url}`
+          : 'Network request failed';
+        markNetworkError(current, reason);
+        notify();
+      });
+
+      this.addEventListener('abort', () => {
+        const current = entries.find((item) => item.id === this._entryId);
+        if (!current) {
+          return;
+        }
+        current.finishedAt = current.finishedAt ?? Date.now();
+        current.durationMs =
+          current.durationMs ?? current.finishedAt - current.startedAt;
+        markNetworkError(current, 'Request aborted');
+        notify();
+      });
+
+      try {
+        return super.send(body as never);
+      } catch (error) {
+        entry.finishedAt = Date.now();
+        entry.durationMs = entry.finishedAt - entry.startedAt;
+        const fallbackReason = isInvalidHttpUrl(this._url)
+          ? `Invalid URL: ${this._url}`
+          : 'Network request failed';
+        markNetworkError(entry, getErrorMessage(error) ?? fallbackReason);
+        notify();
+        throw error;
+      }
     }
   }
 
