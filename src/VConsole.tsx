@@ -47,6 +47,8 @@ const PANEL_HEIGHT_RATIO = 7 / 9;
 const EMPTY_EXCLUDE: VConsoleExclude = {};
 const LOG_SUB_TABS: LogFilterTab[] = ['All', 'log', 'info', 'warn', 'error'];
 const ROOT_TABS: VConsoleTab[] = ['Log', 'Network', 'System', 'App'];
+const NETWORK_DURATION_WARN_THRESHOLD_MS = 1000;
+const NETWORK_DURATION_SEVERE_THRESHOLD_MS = 3000;
 
 const LOG_THEME = {
   log: { backgroundColor: '#FFFFFF', color: '#111111' },
@@ -137,6 +139,26 @@ function prettyText(value: unknown): string {
 
 function isNetworkErrorEntry(item: NetworkEntry): boolean {
   return item.isError === true;
+}
+
+function getNetworkItemBackgroundColor(item: NetworkEntry): string | undefined {
+  if (isNetworkErrorEntry(item)) {
+    return LOG_THEME.error.backgroundColor;
+  }
+
+  if (typeof item.durationMs !== 'number') {
+    return undefined;
+  }
+
+  if (item.durationMs >= NETWORK_DURATION_SEVERE_THRESHOLD_MS) {
+    return LOG_THEME.error.backgroundColor;
+  }
+
+  if (item.durationMs >= NETWORK_DURATION_WARN_THRESHOLD_MS) {
+    return LOG_THEME.warn.backgroundColor;
+  }
+
+  return undefined;
 }
 
 function buildNetworkCopyText(item: NetworkEntry): string {
@@ -678,6 +700,7 @@ export function VConsole({
     item,
   }) => {
     const isError = isNetworkErrorEntry(item);
+    const backgroundColor = getNetworkItemBackgroundColor(item);
     const startedTime = formatLogTime(item.startedAt);
     const finishedTime =
       typeof item.finishedAt === 'number'
@@ -685,10 +708,7 @@ export function VConsole({
         : '-';
     return (
       <View
-        style={[
-          styles.listItem,
-          isError ? { backgroundColor: LOG_THEME.error.backgroundColor } : null,
-        ]}
+        style={[styles.listItem, backgroundColor ? { backgroundColor } : null]}
       >
         <View style={styles.listItemMain}>
           <Text style={styles.networkTitle}>

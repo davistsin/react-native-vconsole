@@ -1526,7 +1526,7 @@ PODS:
     - React-perflogger (= 0.78.2)
     - React-utils (= 0.78.2)
   - SocketRocket (0.7.1)
-  - Vconsole (0.1.0):
+  - Vconsole (0.4.0):
     - DoubleConversion
     - glog
     - hermes-engine
@@ -1828,7 +1828,7 @@ SPEC CHECKSUMS:
   ReactCodegen: 78b64f0ad96ef733616f54d0c20923f6c67287fd
   ReactCommon: 547db015202a80a5b3e7e041586ea54c4a087180
   SocketRocket: d4aabe649be1e368d1318fdf28a022d714d65748
-  Vconsole: 1daac5aab9664436471a93622f03f30e9b2e54d5
+  Vconsole: 996d52c9225cce8e610b4a3f758a5e436fac15aa
   Yoga: 66a9a23a82dd4081b393babe509967097759b3d6
 
 PODFILE CHECKSUM: 0f2a3737a7939444739013fc26cfe61b602b8a9e
