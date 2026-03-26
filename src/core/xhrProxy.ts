@@ -3,6 +3,7 @@ import type { NetworkEntry } from '../types';
 type NetworkListener = (entries: NetworkEntry[]) => void;
 type InstallXhrProxyOptions = {
   excludeHosts?: string[];
+  excludeIp?: boolean;
 };
 
 const MAX_NETWORK_COUNT = 500;
@@ -14,6 +15,7 @@ let isInstalled = false;
 let networkId = 1;
 let OriginalXHR: typeof XMLHttpRequest | undefined;
 let ignoredHosts = new Set<string>();
+let ignoredIpHost = false;
 
 function normalizeHosts(hosts?: string[]): Set<string> {
   return new Set(
@@ -42,12 +44,70 @@ function getHostFromUrl(rawUrl: string): string | undefined {
   }
 }
 
-function shouldSkipNetworkCapture(rawUrl: string): boolean {
-  const host = getHostFromUrl(rawUrl);
-  if (!host) {
+function getHostnameFromUrl(rawUrl: string): string | undefined {
+  if (!rawUrl) {
+    return undefined;
+  }
+
+  const isAbsoluteHttp = /^https?:\/\//i.test(rawUrl);
+  const isProtocolRelative = /^\/\//.test(rawUrl);
+  if (!isAbsoluteHttp && !isProtocolRelative) {
+    return undefined;
+  }
+
+  const normalizedUrl = isProtocolRelative ? `https:${rawUrl}` : rawUrl;
+  try {
+    return new URL(normalizedUrl).hostname.toLowerCase();
+  } catch {
+    const authority = normalizedUrl.match(/^https?:\/\/([^/?#]+)/i)?.[1];
+    if (!authority) {
+      return undefined;
+    }
+    if (authority.startsWith('[')) {
+      const endIndex = authority.indexOf(']');
+      return endIndex > 1
+        ? authority.slice(1, endIndex).toLowerCase()
+        : undefined;
+    }
+    return authority.split(':')[0]?.toLowerCase();
+  }
+}
+
+function isIpv4Address(hostname: string): boolean {
+  const segments = hostname.split('.');
+  if (segments.length !== 4) {
     return false;
   }
-  return ignoredHosts.has(host);
+  return segments.every((part) => {
+    if (!/^\d{1,3}$/.test(part)) {
+      return false;
+    }
+    const value = Number(part);
+    return value >= 0 && value <= 255;
+  });
+}
+
+function isIpv6Address(hostname: string): boolean {
+  return hostname.includes(':') && /^[0-9a-f:.]+$/i.test(hostname);
+}
+
+function isIpAddressHostname(hostname: string): boolean {
+  return isIpv4Address(hostname) || isIpv6Address(hostname);
+}
+
+function shouldSkipNetworkCapture(rawUrl: string): boolean {
+  const host = getHostFromUrl(rawUrl);
+  if (host && ignoredHosts.has(host)) {
+    return true;
+  }
+  if (!ignoredIpHost) {
+    return false;
+  }
+  const hostname = getHostnameFromUrl(rawUrl);
+  if (!hostname) {
+    return false;
+  }
+  return isIpAddressHostname(hostname);
 }
 
 function getErrorMessage(error: unknown): string | undefined {
@@ -224,6 +284,7 @@ function parseHeaders(rawHeaders?: string | null): Record<string, string> {
 
 export function installXhrProxy(options?: InstallXhrProxyOptions) {
   ignoredHosts = normalizeHosts(options?.excludeHosts);
+  ignoredIpHost = options?.excludeIp === true;
 
   if (isInstalled || typeof XMLHttpRequest === 'undefined') {
     return;

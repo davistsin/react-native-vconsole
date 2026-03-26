@@ -42,7 +42,7 @@ import type {
 const BUTTON_WIDTH = 88;
 const BUTTON_HEIGHT = 36;
 const PANEL_HEIGHT_RATIO = 7 / 9;
-const EMPTY_FILTER: string[] = [];
+const EMPTY_EXCLUDE: VConsoleExclude = {};
 const LOG_SUB_TABS: LogFilterTab[] = ['All', 'log', 'info', 'warn', 'error'];
 const ROOT_TABS: VConsoleTab[] = ['Log', 'Network', 'System', 'App'];
 
@@ -62,7 +62,12 @@ type NativeModuleShape = {
 
 export type VConsoleProps = {
   enable?: boolean;
-  exclude?: string[];
+  exclude?: VConsoleExclude;
+};
+
+type VConsoleExclude = {
+  domains?: string[];
+  ip?: boolean;
 };
 
 function clamp(value: number, min: number, max: number): number {
@@ -321,7 +326,7 @@ function useFlatListRefs() {
 
 export function VConsole({
   enable = true,
-  exclude = EMPTY_FILTER,
+  exclude = EMPTY_EXCLUDE,
 }: VConsoleProps) {
   const nativeModule = NativeModules.Vconsole as NativeModuleShape | undefined;
   const { width, height } = Dimensions.get('window');
@@ -362,10 +367,14 @@ export function VConsole({
   const panelTranslateY = useRef(new Animated.Value(panelHeight)).current;
   const logListRefs = useFlatListRefs();
   const networkListRef = useRef<FlatList<NetworkEntry>>(null);
-  const normalizedExclude = useMemo(
-    () => exclude.map((item) => item.trim().toLowerCase()).filter(Boolean),
-    [exclude]
+  const normalizedExcludeDomains = useMemo(
+    () =>
+      (exclude.domains ?? [])
+        .map((item) => item.trim().toLowerCase())
+        .filter(Boolean),
+    [exclude.domains]
   );
+  const shouldExcludeIp = exclude.ip === true;
 
   useEffect(() => {
     if (!enable) {
@@ -374,7 +383,10 @@ export function VConsole({
     }
 
     installConsoleProxy();
-    installXhrProxy({ excludeHosts: normalizedExclude });
+    installXhrProxy({
+      excludeHosts: normalizedExcludeDomains,
+      excludeIp: shouldExcludeIp,
+    });
 
     const unsubscribeLog = subscribeLogEntries(setLogEntries);
     const unsubscribeNetwork = subscribeNetworkEntries(setNetworkEntries);
@@ -387,7 +399,7 @@ export function VConsole({
       uninstallConsoleProxy();
       uninstallXhrProxy();
     };
-  }, [enable, normalizedExclude]);
+  }, [enable, normalizedExcludeDomains, shouldExcludeIp]);
 
   useEffect(() => {
     dragPosition.stopAnimation((value) => {

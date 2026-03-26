@@ -35,7 +35,13 @@ export default function App() {
         <View style={styles.spacer} />
         <Button title="Send Network Request" onPress={sendNetworkRequest} />
       </View>
-      <VConsole enable={true} exclude={['localhost:8081']} />
+      <VConsole
+        enable={true}
+        exclude={{
+          domains: ['localhost:8081'],
+          ip: true,
+        }}
+      />
     </SafeAreaView>
   );
 }

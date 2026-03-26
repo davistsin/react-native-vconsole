@@ -18,11 +18,26 @@ export default function App() {
   return (
     <>
       {/* your app content */}
-      <VConsole enable={true} exclude={['localhost:8081']} />
+      <VConsole
+        enable={true}
+        exclude={{
+          domains: ['localhost:8081'],
+          ip: true,
+        }}
+      />
     </>
   );
 }
 ```
+
+## VConsole Props
+
+| Prop | Type | Default | Description |
+| --- | --- | --- | --- |
+| `enable` | `boolean` | `true` | Whether to enable and render vConsole. |
+| `exclude` | `{ domains?: string[]; ip?: boolean }` | `{}` | Network capture exclusion rules. |
+| `exclude.domains` | `string[]` | `[]` | Hosts to exclude from Network tab capture, keeping previous host-based matching behavior (e.g. `localhost:8081`). |
+| `exclude.ip` | `boolean` | `false` | When `true`, requests whose hostname is an IP address (IPv4/IPv6) will be skipped in Network tab capture. |
 
 ## Features
 
