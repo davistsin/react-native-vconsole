@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
   Clipboard,
@@ -19,6 +19,7 @@ import {
   ScrollView,
   type FlatListProps,
   ActivityIndicator,
+  TouchableOpacity,
 } from 'react-native';
 import {
   clearLogEntries,
@@ -304,12 +305,16 @@ function ObjectTree({
 
   return (
     <View style={styles.treeNode}>
-      <Pressable onPress={() => onToggle(nodeKey)} style={styles.treeHeader}>
+      <TouchableOpacity
+        activeOpacity={0.68}
+        onPress={() => onToggle(nodeKey)}
+        style={styles.treeHeader}
+      >
         <Text style={styles.arrow}>{opened ? '▼' : '▶'}</Text>
         <Text style={styles.treeLabel}>
           {isArray ? `Array(${entries.length})` : `Object(${entries.length})`}
         </Text>
-      </Pressable>
+      </TouchableOpacity>
       {opened ? (
         <View style={styles.treeChildren}>
           {entries.map(([key, item]) => (
@@ -328,6 +333,187 @@ function ObjectTree({
     </View>
   );
 }
+
+function retryNetworkRequest(item: NetworkEntry) {
+  const method = (item.method || 'GET').toUpperCase();
+  const url = normalizeRetryUrl(item.url);
+  if (!url) {
+    console.error('[vConsole] Retry failed: empty request URL');
+    return;
+  }
+
+  const headers = buildRetryHeaders(item.requestHeaders);
+  const body = buildRetryBody(item.requestBody, method);
+  const hasContentType = Object.keys(headers).some(
+    (key) => key.toLowerCase() === 'content-type'
+  );
+
+  if (
+    body &&
+    typeof body === 'string' &&
+    typeof item.requestBody === 'object' &&
+    item.requestBody !== null &&
+    !hasContentType
+  ) {
+    headers['Content-Type'] = 'application/json';
+  }
+
+  fetch(url, {
+    method,
+    headers,
+    body: body as never,
+  }).catch((error: unknown) => {
+    console.error('[vConsole] Retry request failed', error);
+  });
+}
+
+const LogListItem = memo(function LogListItem({ item }: { item: LogEntry }) {
+  const [expandedMap, setExpandedMap] = useState<ExpandedMap>({});
+  const levelTheme = LOG_THEME[item.level];
+
+  const onToggleNode = useCallback((key: string) => {
+    setExpandedMap((prev) => ({
+      ...prev,
+      [key]: !prev[key],
+    }));
+  }, []);
+
+  return (
+    <View
+      style={[styles.listItem, { backgroundColor: levelTheme.backgroundColor }]}
+    >
+      <View style={styles.listItemMain}>
+        <Text style={[styles.logLevelText, { color: levelTheme.color }]}>
+          [{item.level.toUpperCase()}]
+          <Text style={styles.logTimeText}>
+            {' '}
+            {formatLogTime(item.timestamp)}
+          </Text>
+        </Text>
+        <View style={styles.logPayload}>
+          {item.args.map((arg, index) => (
+            <ObjectTree
+              key={`${item.id}.arg.${index}`}
+              value={arg}
+              nodeKey={`${item.id}.arg.${index}`}
+              expandedMap={expandedMap}
+              onToggle={onToggleNode}
+            />
+          ))}
+        </View>
+      </View>
+      <Pressable
+        style={styles.copyButton}
+        onPress={() => copyToClipboardWithFeedback(item.text)}
+      >
+        <Text style={styles.copyButtonText}>Copy</Text>
+      </Pressable>
+    </View>
+  );
+});
+
+const NetworkListItem = function NetworkListItem({
+  item,
+}: {
+  item: NetworkEntry;
+}) {
+  const [expandedMap, setExpandedMap] = useState<ExpandedMap>({});
+  const isError = isNetworkErrorEntry(item);
+  const backgroundColor = getNetworkItemBackgroundColor(item);
+  const startedTime = formatLogTime(item.startedAt);
+  const finishedTime =
+    typeof item.finishedAt === 'number' ? formatLogTime(item.finishedAt) : '-';
+
+  const onToggleNode = useCallback((key: string) => {
+    setExpandedMap((prev) => ({
+      ...prev,
+      [key]: !prev[key],
+    }));
+  }, []);
+
+  return (
+    <View
+      style={[styles.listItem, backgroundColor ? { backgroundColor } : null]}
+    >
+      <View style={styles.listItemMain}>
+        <Text style={styles.networkTitle}>
+          {item.method} {item.url}
+        </Text>
+        <Text style={styles.networkLabel}>
+          Time: {startedTime}
+          {finishedTime !== '-' ? ` ~ ${finishedTime}` : ''}
+          {'   '}
+          Duration:{' '}
+          {typeof item.durationMs === 'number' ? `${item.durationMs}ms` : '-'}
+        </Text>
+        <Text style={styles.networkLabel}>Status: {item.status ?? '-'}</Text>
+        <View style={styles.networkBlock}>
+          <Text style={styles.networkLabel}>Request Headers</Text>
+          <ObjectTree
+            value={item.requestHeaders}
+            nodeKey={`${item.id}.requestHeaders`}
+            expandedMap={expandedMap}
+            onToggle={onToggleNode}
+          />
+        </View>
+        <View style={styles.networkBlock}>
+          <Text style={styles.networkLabel}>Request Payload</Text>
+          <ObjectTree
+            value={item.requestBody ?? ''}
+            nodeKey={`${item.id}.requestBody`}
+            expandedMap={expandedMap}
+            onToggle={onToggleNode}
+          />
+        </View>
+        {isError ? (
+          <View style={styles.networkBlock}>
+            <Text style={[styles.networkLabel, styles.networkErrorLabel]}>
+              Error Reason
+            </Text>
+            <Text style={styles.networkErrorText}>
+              {item.errorReason ?? 'Network request failed'}
+            </Text>
+          </View>
+        ) : (
+          <>
+            <View style={styles.networkBlock}>
+              <Text style={styles.networkLabel}>Response Headers</Text>
+              <ObjectTree
+                value={item.responseHeaders}
+                nodeKey={`${item.id}.responseHeaders`}
+                expandedMap={expandedMap}
+                onToggle={onToggleNode}
+              />
+            </View>
+            <View style={styles.networkBlock}>
+              <Text style={styles.networkLabel}>Response Data</Text>
+              <ScrollView horizontal={true}>
+                <ObjectTree
+                  value={item.responseData ?? ''}
+                  nodeKey={`${item.id}.responseData`}
+                  expandedMap={expandedMap}
+                  onToggle={onToggleNode}
+                />
+              </ScrollView>
+            </View>
+          </>
+        )}
+      </View>
+      <Pressable
+        style={styles.copyButton}
+        onPress={() => copyToClipboardWithFeedback(buildNetworkCopyText(item))}
+      >
+        <Text style={styles.copyButtonText}>Copy</Text>
+      </Pressable>
+      <Pressable
+        style={styles.retryButton}
+        onPress={() => retryNetworkRequest(item)}
+      >
+        <Text style={styles.retryButtonText}>Retry</Text>
+      </Pressable>
+    </View>
+  );
+};
 
 function ListSeparator() {
   return <View style={styles.separator} />;
@@ -392,7 +578,6 @@ function Container(props: VConsoleProps) {
   const [debouncedLogFilter, setDebouncedLogFilter] = useState('');
   const [debouncedNetworkFilter, setDebouncedNetworkFilter] = useState('');
   const [keyboardHeight, setKeyboardHeight] = useState(0);
-  const [expandedMap, setExpandedMap] = useState<ExpandedMap>({});
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
 
@@ -611,13 +796,6 @@ function Container(props: VConsoleProps) {
     [filteredLogEntries]
   );
 
-  const onToggleNode = (key: string) => {
-    setExpandedMap((prev) => ({
-      ...prev,
-      [key]: !prev[key],
-    }));
-  };
-
   const scrollLogTop = () => {
     logListRefs[logSubTab].current?.scrollToOffset({
       offset: 0,
@@ -635,39 +813,6 @@ function Container(props: VConsoleProps) {
 
   const scrollNetworkBottom = () => {
     networkListRef.current?.scrollToEnd({ animated: true });
-  };
-
-  const retryNetworkRequest = (item: NetworkEntry) => {
-    const method = (item.method || 'GET').toUpperCase();
-    const url = normalizeRetryUrl(item.url);
-    if (!url) {
-      console.error('[vConsole] Retry failed: empty request URL');
-      return;
-    }
-
-    const headers = buildRetryHeaders(item.requestHeaders);
-    const body = buildRetryBody(item.requestBody, method);
-    const hasContentType = Object.keys(headers).some(
-      (key) => key.toLowerCase() === 'content-type'
-    );
-
-    if (
-      body &&
-      typeof body === 'string' &&
-      typeof item.requestBody === 'object' &&
-      item.requestBody !== null &&
-      !hasContentType
-    ) {
-      headers['Content-Type'] = 'application/json';
-    }
-
-    fetch(url, {
-      method,
-      headers,
-      body: body as never,
-    }).catch((error: unknown) => {
-      console.error('[vConsole] Retry request failed', error);
-    });
   };
 
   const renderRootTab = (tab: VConsoleTab) => (
@@ -697,138 +842,13 @@ function Container(props: VConsoleProps) {
   );
 
   const renderLogItem: FlatListProps<LogEntry>['renderItem'] = ({ item }) => {
-    const levelTheme = LOG_THEME[item.level];
-    return (
-      <View
-        style={[
-          styles.listItem,
-          { backgroundColor: levelTheme.backgroundColor },
-        ]}
-      >
-        <View style={styles.listItemMain}>
-          <Text style={[styles.logLevelText, { color: levelTheme.color }]}>
-            [{item.level.toUpperCase()}]
-            <Text style={styles.logTimeText}>
-              {' '}
-              {formatLogTime(item.timestamp)}
-            </Text>
-          </Text>
-          <View style={styles.logPayload}>
-            {item.args.map((arg, index) => (
-              <ObjectTree
-                key={`${item.id}.arg.${index}`}
-                value={arg}
-                nodeKey={`${item.id}.arg.${index}`}
-                expandedMap={expandedMap}
-                onToggle={onToggleNode}
-              />
-            ))}
-          </View>
-        </View>
-        <Pressable
-          style={styles.copyButton}
-          onPress={() => copyToClipboardWithFeedback(item.text)}
-        >
-          <Text style={styles.copyButtonText}>Copy</Text>
-        </Pressable>
-      </View>
-    );
+    return <LogListItem item={item} />;
   };
 
   const renderNetworkItem: FlatListProps<NetworkEntry>['renderItem'] = ({
     item,
   }) => {
-    const isError = isNetworkErrorEntry(item);
-    const backgroundColor = getNetworkItemBackgroundColor(item);
-    const startedTime = formatLogTime(item.startedAt);
-    const finishedTime =
-      typeof item.finishedAt === 'number'
-        ? formatLogTime(item.finishedAt)
-        : '-';
-    return (
-      <View
-        style={[styles.listItem, backgroundColor ? { backgroundColor } : null]}
-      >
-        <View style={styles.listItemMain}>
-          <Text style={styles.networkTitle}>
-            {item.method} {item.url}
-          </Text>
-          <Text style={styles.networkLabel}>
-            Time: {startedTime}
-            {finishedTime !== '-' ? ` ~ ${finishedTime}` : ''}
-            {'   '}
-            Duration:{' '}
-            {typeof item.durationMs === 'number' ? `${item.durationMs}ms` : '-'}
-          </Text>
-          <Text style={styles.networkLabel}>Status: {item.status ?? '-'}</Text>
-          <View style={styles.networkBlock}>
-            <Text style={styles.networkLabel}>Request Headers</Text>
-            <ObjectTree
-              value={item.requestHeaders}
-              nodeKey={`${item.id}.requestHeaders`}
-              expandedMap={expandedMap}
-              onToggle={onToggleNode}
-            />
-          </View>
-          <View style={styles.networkBlock}>
-            <Text style={styles.networkLabel}>Request Payload</Text>
-            <ObjectTree
-              value={item.requestBody ?? ''}
-              nodeKey={`${item.id}.requestBody`}
-              expandedMap={expandedMap}
-              onToggle={onToggleNode}
-            />
-          </View>
-          {isError ? (
-            <View style={styles.networkBlock}>
-              <Text style={[styles.networkLabel, styles.networkErrorLabel]}>
-                Error Reason
-              </Text>
-              <Text style={styles.networkErrorText}>
-                {item.errorReason ?? 'Network request failed'}
-              </Text>
-            </View>
-          ) : (
-            <>
-              <View style={styles.networkBlock}>
-                <Text style={styles.networkLabel}>Response Headers</Text>
-                <ObjectTree
-                  value={item.responseHeaders}
-                  nodeKey={`${item.id}.responseHeaders`}
-                  expandedMap={expandedMap}
-                  onToggle={onToggleNode}
-                />
-              </View>
-              <View style={styles.networkBlock}>
-                <Text style={styles.networkLabel}>Response Data</Text>
-                <ScrollView horizontal={true}>
-                  <ObjectTree
-                    value={item.responseData ?? ''}
-                    nodeKey={`${item.id}.responseData`}
-                    expandedMap={expandedMap}
-                    onToggle={onToggleNode}
-                  />
-                </ScrollView>
-              </View>
-            </>
-          )}
-        </View>
-        <Pressable
-          style={styles.copyButton}
-          onPress={() =>
-            copyToClipboardWithFeedback(buildNetworkCopyText(item))
-          }
-        >
-          <Text style={styles.copyButtonText}>Copy</Text>
-        </Pressable>
-        <Pressable
-          style={styles.retryButton}
-          onPress={() => retryNetworkRequest(item)}
-        >
-          <Text style={styles.retryButtonText}>Retry</Text>
-        </Pressable>
-      </View>
-    );
+    return <NetworkListItem item={item} />;
   };
 
   const renderLogPanel = (visible: boolean) => (
@@ -883,7 +903,6 @@ function Container(props: VConsoleProps) {
       <View style={styles.actionsRow}>
         {renderActionButton('Clear', () => {
           clearLogEntries();
-          setExpandedMap({});
         })}
         {renderActionButton('Top', scrollLogTop)}
         {renderActionButton('Bottom', scrollLogBottom)}
@@ -913,7 +932,6 @@ function Container(props: VConsoleProps) {
       <View style={styles.actionsRow}>
         {renderActionButton('Clear', () => {
           clearNetworkEntries();
-          setExpandedMap({});
         })}
         {renderActionButton('Top', scrollNetworkTop)}
         {renderActionButton('Bottom', scrollNetworkBottom)}
