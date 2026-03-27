@@ -4,6 +4,7 @@ import {
   Clipboard,
   Dimensions,
   FlatList,
+  InteractionManager,
   Keyboard,
   NativeModules,
   PanResponder,
@@ -17,6 +18,7 @@ import {
   View,
   ScrollView,
   type FlatListProps,
+  ActivityIndicator,
 } from 'react-native';
 import {
   clearLogEntries,
@@ -44,6 +46,8 @@ import type {
 const BUTTON_WIDTH = 88;
 const BUTTON_HEIGHT = 36;
 const PANEL_HEIGHT_RATIO = 7 / 9;
+const PANEL_ANIMATION_DURATION_MS = 220;
+const PANEL_MASK_MAX_OPACITY = 0.25;
 const EMPTY_EXCLUDE: VConsoleExclude = {};
 const LOG_SUB_TABS: LogFilterTab[] = ['All', 'log', 'info', 'warn', 'error'];
 const ROOT_TABS: VConsoleTab[] = ['Log', 'Network', 'System', 'App'];
@@ -375,8 +379,10 @@ function Container(props: VConsoleProps) {
     new Animated.ValueXY({ x: 12, y: initialY })
   ).current;
   const dragStartPoint = useRef({ x: 12, y: initialY });
+  const panelContentTaskRef = useRef<{ cancel: () => void } | null>(null);
 
   const [panelVisible, setPanelVisible] = useState(false);
+  const [panelContentReady, setPanelContentReady] = useState(false);
   const [activeTab, setActiveTab] = useState<VConsoleTab>('Log');
   const [logSubTab, setLogSubTab] = useState<LogFilterTab>('All');
   const [logEntries, setLogEntries] = useState<LogEntry[]>([]);
@@ -392,6 +398,7 @@ function Container(props: VConsoleProps) {
 
   const panelHeight = Math.floor(height * PANEL_HEIGHT_RATIO);
   const panelTranslateY = useRef(new Animated.Value(panelHeight)).current;
+  const maskOpacity = useRef(new Animated.Value(0)).current;
   const logListRefs = useFlatListRefs();
   const networkListRef = useRef<FlatList<NetworkEntry>>(null);
   const normalizedExcludeDomains = useMemo(
@@ -467,6 +474,13 @@ function Container(props: VConsoleProps) {
   }, []);
 
   useEffect(() => {
+    return () => {
+      panelContentTaskRef.current?.cancel();
+      panelContentTaskRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedLogFilter(logFilterInput);
     }, 1000);
@@ -512,23 +526,55 @@ function Container(props: VConsoleProps) {
   );
 
   const openPanel = () => {
+    panelContentTaskRef.current?.cancel();
+    panelContentTaskRef.current = null;
     setPanelVisible(true);
+    setPanelContentReady(false);
     panelTranslateY.setValue(panelHeight);
-    Animated.timing(panelTranslateY, {
-      toValue: 0,
-      duration: 220,
-      useNativeDriver: true,
-    }).start();
+    maskOpacity.setValue(0);
+    Animated.parallel([
+      Animated.timing(panelTranslateY, {
+        toValue: 0,
+        duration: PANEL_ANIMATION_DURATION_MS,
+        useNativeDriver: true,
+      }),
+      Animated.timing(maskOpacity, {
+        toValue: PANEL_MASK_MAX_OPACITY,
+        duration: PANEL_ANIMATION_DURATION_MS,
+        useNativeDriver: true,
+      }),
+    ]).start(({ finished }) => {
+      if (!finished) {
+        return;
+      }
+      panelContentTaskRef.current = InteractionManager.runAfterInteractions(
+        () => {
+          setPanelContentReady(true);
+          panelContentTaskRef.current = null;
+        }
+      );
+    });
   };
 
   const closePanel = () => {
-    Animated.timing(panelTranslateY, {
-      toValue: panelHeight,
-      duration: 220,
-      useNativeDriver: true,
-    }).start(({ finished }) => {
+    panelContentTaskRef.current?.cancel();
+    panelContentTaskRef.current = null;
+    Animated.parallel([
+      Animated.timing(panelTranslateY, {
+        toValue: panelHeight,
+        duration: PANEL_ANIMATION_DURATION_MS,
+        useNativeDriver: true,
+      }),
+      Animated.timing(maskOpacity, {
+        toValue: 0,
+        duration: PANEL_ANIMATION_DURATION_MS,
+        useNativeDriver: true,
+      }),
+    ]).start(({ finished }) => {
       if (finished) {
         setPanelVisible(false);
+        setPanelContentReady(false);
+        maskOpacity.setValue(0);
       }
     });
   };
@@ -946,7 +992,9 @@ function Container(props: VConsoleProps) {
 
       {panelVisible ? (
         <View style={styles.overlayWrap}>
-          <Pressable style={styles.mask} onPress={closePanel} />
+          <Animated.View style={[styles.mask, { opacity: maskOpacity }]}>
+            <Pressable style={StyleSheet.absoluteFill} onPress={closePanel} />
+          </Animated.View>
           <Animated.View
             style={[
               styles.panel,
@@ -958,10 +1006,18 @@ function Container(props: VConsoleProps) {
             ]}
           >
             <View style={styles.topTabRow}>{ROOT_TABS.map(renderRootTab)}</View>
-            {renderLogPanel(activeTab === 'Log')}
-            {renderNetworkPanel(activeTab === 'Network')}
-            {renderSystemPanel(activeTab === 'System')}
-            {renderAppPanel(activeTab === 'App')}
+            {panelContentReady ? (
+              <>
+                {renderLogPanel(activeTab === 'Log')}
+                {renderNetworkPanel(activeTab === 'Network')}
+                {renderSystemPanel(activeTab === 'System')}
+                {renderAppPanel(activeTab === 'App')}
+              </>
+            ) : (
+              <View style={styles.loadingContainer}>
+                <ActivityIndicator />
+              </View>
+            )}
           </Animated.View>
         </View>
       ) : null}
@@ -1003,7 +1059,7 @@ const styles = StyleSheet.create({
   },
   mask: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0, 0, 0, 0.25)',
+    backgroundColor: '#000000',
   },
   panel: {
     width: '100%',
@@ -1011,6 +1067,11 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 14,
     borderTopRightRadius: 14,
     overflow: 'hidden',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   topTabRow: {
     flexDirection: 'row',
