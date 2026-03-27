@@ -348,10 +348,8 @@ function useFlatListRefs() {
   );
 }
 
-export function VConsole({
-  enable = true,
-  exclude = EMPTY_EXCLUDE,
-}: VConsoleProps) {
+function Container(props: VConsoleProps) {
+  const { exclude = EMPTY_EXCLUDE } = props;
   const nativeModule = NativeModules.Vconsole as NativeModuleShape | undefined;
   const { width, height } = Dimensions.get('window');
 
@@ -406,11 +404,6 @@ export function VConsole({
   const shouldExcludeIp = exclude.ip === true;
 
   useEffect(() => {
-    if (!enable) {
-      setPanelVisible(false);
-      return;
-    }
-
     installConsoleProxy();
     installXhrProxy({
       excludeHosts: normalizedExcludeDomains,
@@ -428,7 +421,7 @@ export function VConsole({
       uninstallConsoleProxy();
       uninstallXhrProxy();
     };
-  }, [enable, normalizedExcludeDomains, shouldExcludeIp]);
+  }, [normalizedExcludeDomains, shouldExcludeIp]);
 
   useEffect(() => {
     dragPosition.stopAnimation((value) => {
@@ -935,10 +928,6 @@ export function VConsole({
     </View>
   );
 
-  if (!enable) {
-    return null;
-  }
-
   return (
     <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
       {!panelVisible ? (
@@ -978,6 +967,16 @@ export function VConsole({
       ) : null}
     </View>
   );
+}
+
+export function VConsole({
+  enable = true,
+  exclude = EMPTY_EXCLUDE,
+}: VConsoleProps) {
+  if (!enable) {
+    return null;
+  }
+  return <Container exclude={exclude} />;
 }
 
 const styles = StyleSheet.create({
