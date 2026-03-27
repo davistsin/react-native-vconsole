@@ -1,16 +1,9 @@
-import { useEffect } from 'react';
+import { useCallback, useEffect } from 'react';
 import { Button, SafeAreaView, StyleSheet, Text, View } from 'react-native';
 import { VConsole } from 'react-native-vconsole';
 
 export default function App() {
-  useEffect(() => {
-    console.log('vConsole mounted', { from: 'example app' });
-    console.info('console.info message');
-    console.warn('console.warn message');
-    console.error('console.error message');
-  }, []);
-
-  const sendNetworkRequest = async () => {
+  const sendNetworkRequest = useCallback(async () => {
     try {
       await fetch('https://jsonplaceholder.typicode.com/posts/1', {
         method: 'GET',
@@ -22,7 +15,21 @@ export default function App() {
     } catch (error) {
       console.error('network request failed', error);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    console.log('vConsole mounted', { from: 'example app' });
+    console.info('console.info message');
+    console.warn('console.warn message');
+    console.error('console.error message');
+
+    const interval = setInterval(() => {
+      sendNetworkRequest();
+      console.log('console.log message', { from: 'example app' });
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [sendNetworkRequest]);
 
   return (
     <SafeAreaView style={styles.container}>
@@ -37,6 +44,7 @@ export default function App() {
       </View>
       <VConsole
         enable={true}
+        autoFollow={true}
         exclude={{
           domains: ['localhost:8081'],
           ip: true,

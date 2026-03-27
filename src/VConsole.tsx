@@ -17,6 +17,8 @@ import {
   ToastAndroid,
   View,
   ScrollView,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
   type FlatListProps,
   ActivityIndicator,
   TouchableOpacity,
@@ -54,6 +56,7 @@ const LOG_SUB_TABS: LogFilterTab[] = ['All', 'log', 'info', 'warn', 'error'];
 const ROOT_TABS: VConsoleTab[] = ['Log', 'Network', 'System', 'App'];
 const NETWORK_DURATION_WARN_THRESHOLD_MS = 1000;
 const NETWORK_DURATION_SEVERE_THRESHOLD_MS = 3000;
+const AUTO_SCROLL_BOTTOM_THRESHOLD = 24;
 
 const LOG_THEME = {
   log: { backgroundColor: '#FFFFFF', color: '#111111' },
@@ -72,6 +75,7 @@ type NativeModuleShape = {
 export type VConsoleProps = {
   enable?: boolean;
   exclude?: VConsoleExclude;
+  autoFollow?: boolean;
 };
 
 type VConsoleExclude = {
@@ -81,6 +85,13 @@ type VConsoleExclude = {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
+}
+
+function isNearBottom(event: NativeSyntheticEvent<NativeScrollEvent>): boolean {
+  const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+  const remaining =
+    contentSize.height - (contentOffset.y + layoutMeasurement.height);
+  return remaining <= AUTO_SCROLL_BOTTOM_THRESHOLD;
 }
 
 function getDisplayValue(value: unknown): string {
@@ -121,11 +132,14 @@ function formatLogTime(timestamp: number): string {
   if (Number.isNaN(date.getTime())) {
     return '--:--:--.---';
   }
+  const YY = String(date.getFullYear()).slice(-2);
+  const MM = String(date.getMonth() + 1).padStart(2, '0');
+  const DD = String(date.getDate()).padStart(2, '0');
   const hh = String(date.getHours()).padStart(2, '0');
   const mm = String(date.getMinutes()).padStart(2, '0');
   const ss = String(date.getSeconds()).padStart(2, '0');
   const ms = String(date.getMilliseconds()).padStart(3, '0');
-  return `${hh}:${mm}:${ss}.${ms}`;
+  return `${YY}/${MM}/${DD} ${hh}:${mm}:${ss}.${ms}`;
 }
 
 function prettyText(value: unknown): string {
@@ -306,6 +320,7 @@ function ObjectTree({
   return (
     <View style={styles.treeNode}>
       <TouchableOpacity
+        hitSlop={8}
         activeOpacity={0.68}
         onPress={() => onToggle(nodeKey)}
         style={styles.treeHeader}
@@ -421,8 +436,6 @@ const NetworkListItem = function NetworkListItem({
   const isError = isNetworkErrorEntry(item);
   const backgroundColor = getNetworkItemBackgroundColor(item);
   const startedTime = formatLogTime(item.startedAt);
-  const finishedTime =
-    typeof item.finishedAt === 'number' ? formatLogTime(item.finishedAt) : '-';
 
   const onToggleNode = useCallback((key: string) => {
     setExpandedMap((prev) => ({
@@ -441,7 +454,6 @@ const NetworkListItem = function NetworkListItem({
         </Text>
         <Text style={styles.networkLabel}>
           Time: {startedTime}
-          {finishedTime !== '-' ? ` ~ ${finishedTime}` : ''}
           {'   '}
           Duration:{' '}
           {typeof item.durationMs === 'number' ? `${item.durationMs}ms` : '-'}
@@ -539,7 +551,8 @@ function useFlatListRefs() {
 }
 
 function Container(props: VConsoleProps) {
-  const { exclude = EMPTY_EXCLUDE } = props;
+  const { exclude = EMPTY_EXCLUDE, autoFollow } = props;
+  const autoFollowEnabled = autoFollow === true;
   const nativeModule = NativeModules.Vconsole as NativeModuleShape | undefined;
   const { width, height } = Dimensions.get('window');
 
@@ -586,6 +599,35 @@ function Container(props: VConsoleProps) {
   const maskOpacity = useRef(new Animated.Value(0)).current;
   const logListRefs = useFlatListRefs();
   const networkListRef = useRef<FlatList<NetworkEntry>>(null);
+  const logAutoFollowRef = useRef<Record<LogFilterTab, boolean>>({
+    All: autoFollowEnabled,
+    log: autoFollowEnabled,
+    info: autoFollowEnabled,
+    warn: autoFollowEnabled,
+    error: autoFollowEnabled,
+  });
+  const networkAutoFollowRef = useRef(autoFollowEnabled);
+  const [logAutoFollowState, setLogAutoFollowState] = useState<
+    Record<LogFilterTab, boolean>
+  >({
+    All: autoFollowEnabled,
+    log: autoFollowEnabled,
+    info: autoFollowEnabled,
+    warn: autoFollowEnabled,
+    error: autoFollowEnabled,
+  });
+  const [networkAutoFollowState, setNetworkAutoFollowState] =
+    useState(autoFollowEnabled);
+  const logGestureDraggingRef = useRef<Record<LogFilterTab, boolean>>({
+    All: false,
+    log: false,
+    info: false,
+    warn: false,
+    error: false,
+  });
+  const networkGestureDraggingRef = useRef(false);
+  const didInitialLogScrollRef = useRef(false);
+  const didInitialNetworkScrollRef = useRef(false);
   const normalizedExcludeDomains = useMemo(
     () =>
       (exclude.domains ?? [])
@@ -594,6 +636,38 @@ function Container(props: VConsoleProps) {
     [exclude.domains]
   );
   const shouldExcludeIp = exclude.ip === true;
+
+  const setLogAutoFollow = useCallback(
+    (tab: LogFilterTab, enabled: boolean) => {
+      const nextEnabled = autoFollowEnabled && enabled;
+      logAutoFollowRef.current[tab] = nextEnabled;
+      setLogAutoFollowState((prev) => {
+        if (prev[tab] === nextEnabled) {
+          return prev;
+        }
+        return { ...prev, [tab]: nextEnabled };
+      });
+    },
+    [autoFollowEnabled]
+  );
+
+  const setNetworkAutoFollow = useCallback(
+    (enabled: boolean) => {
+      const nextEnabled = autoFollowEnabled && enabled;
+      networkAutoFollowRef.current = nextEnabled;
+      setNetworkAutoFollowState((prev) =>
+        prev === nextEnabled ? prev : nextEnabled
+      );
+    },
+    [autoFollowEnabled]
+  );
+
+  useEffect(() => {
+    LOG_SUB_TABS.forEach((tab) => {
+      setLogAutoFollow(tab, autoFollowEnabled);
+    });
+    setNetworkAutoFollow(autoFollowEnabled);
+  }, [autoFollowEnabled, setLogAutoFollow, setNetworkAutoFollow]);
 
   useEffect(() => {
     installConsoleProxy();
@@ -797,23 +871,145 @@ function Container(props: VConsoleProps) {
   );
 
   const scrollLogTop = () => {
+    setLogAutoFollow(logSubTab, false);
     logListRefs[logSubTab].current?.scrollToOffset({
       offset: 0,
       animated: true,
     });
   };
 
-  const scrollLogBottom = () => {
-    logListRefs[logSubTab].current?.scrollToEnd({ animated: true });
-  };
+  const scrollLogBottom = useCallback(
+    (animated = true) => {
+      setLogAutoFollow(logSubTab, true);
+      logListRefs[logSubTab].current?.scrollToEnd({ animated });
+    },
+    [logListRefs, logSubTab, setLogAutoFollow]
+  );
 
   const scrollNetworkTop = () => {
+    setNetworkAutoFollow(false);
     networkListRef.current?.scrollToOffset({ offset: 0, animated: true });
   };
 
-  const scrollNetworkBottom = () => {
-    networkListRef.current?.scrollToEnd({ animated: true });
-  };
+  const scrollNetworkBottom = useCallback(
+    (animated = true) => {
+      setNetworkAutoFollow(true);
+      networkListRef.current?.scrollToEnd({ animated });
+    },
+    [setNetworkAutoFollow]
+  );
+
+  const handleLogScrollBeginDrag = useCallback(
+    (tab: LogFilterTab) => {
+      return () => {
+        logGestureDraggingRef.current[tab] = true;
+        setLogAutoFollow(tab, false);
+      };
+    },
+    [setLogAutoFollow]
+  );
+
+  const handleLogScrollEndDrag = useCallback(
+    (tab: LogFilterTab) => {
+      return (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+        logGestureDraggingRef.current[tab] = false;
+        setLogAutoFollow(tab, isNearBottom(event));
+      };
+    },
+    [setLogAutoFollow]
+  );
+
+  const handleNetworkScrollBeginDrag = useCallback(() => {
+    networkGestureDraggingRef.current = true;
+    setNetworkAutoFollow(false);
+  }, [setNetworkAutoFollow]);
+
+  const handleNetworkScrollEndDrag = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      networkGestureDraggingRef.current = false;
+      setNetworkAutoFollow(isNearBottom(event));
+    },
+    [setNetworkAutoFollow]
+  );
+
+  const handleLogContentSizeChange = useCallback(
+    (tab: LogFilterTab) => {
+      return () => {
+        if (!panelVisible || !panelContentReady || activeTab !== 'Log') {
+          return;
+        }
+        if (logGestureDraggingRef.current[tab]) {
+          return;
+        }
+        if (!logAutoFollowRef.current[tab]) {
+          return;
+        }
+        requestAnimationFrame(() => {
+          logListRefs[tab].current?.scrollToEnd({ animated: true });
+        });
+      };
+    },
+    [activeTab, logListRefs, panelContentReady, panelVisible]
+  );
+
+  const handleNetworkContentSizeChange = useCallback(() => {
+    if (!panelVisible || !panelContentReady || activeTab !== 'Network') {
+      return;
+    }
+    if (networkGestureDraggingRef.current) {
+      return;
+    }
+    if (!networkAutoFollowRef.current) {
+      return;
+    }
+    requestAnimationFrame(() => {
+      networkListRef.current?.scrollToEnd({ animated: true });
+    });
+  }, [activeTab, panelContentReady, panelVisible]);
+
+  useEffect(() => {
+    if (!autoFollowEnabled) {
+      return;
+    }
+    if (!panelVisible || !panelContentReady || activeTab !== 'Log') {
+      return;
+    }
+    if (didInitialLogScrollRef.current) {
+      return;
+    }
+    didInitialLogScrollRef.current = true;
+    requestAnimationFrame(() => {
+      scrollLogBottom(false);
+    });
+  }, [
+    activeTab,
+    autoFollowEnabled,
+    panelContentReady,
+    panelVisible,
+    scrollLogBottom,
+  ]);
+
+  useEffect(() => {
+    if (!autoFollowEnabled) {
+      return;
+    }
+    if (!panelVisible || !panelContentReady || activeTab !== 'Network') {
+      return;
+    }
+    if (didInitialNetworkScrollRef.current) {
+      return;
+    }
+    didInitialNetworkScrollRef.current = true;
+    requestAnimationFrame(() => {
+      scrollNetworkBottom(false);
+    });
+  }, [
+    activeTab,
+    autoFollowEnabled,
+    panelContentReady,
+    panelVisible,
+    scrollNetworkBottom,
+  ]);
 
   const renderRootTab = (tab: VConsoleTab) => (
     <Pressable
@@ -835,8 +1031,16 @@ function Container(props: VConsoleProps) {
     </Pressable>
   );
 
-  const renderActionButton = (label: string, onPress: () => void) => (
-    <Pressable key={label} style={styles.actionButton} onPress={onPress}>
+  const renderActionButton = (
+    label: string,
+    onPress: () => void,
+    active = false
+  ) => (
+    <Pressable
+      key={label}
+      style={[styles.actionButton, active && styles.actionButtonActive]}
+      onPress={onPress}
+    >
       <Text style={styles.actionButtonText}>{label}</Text>
     </Pressable>
   );
@@ -886,6 +1090,9 @@ function Container(props: VConsoleProps) {
               keyExtractor={(item) => `${tab}-${item.id}`}
               renderItem={renderLogItem}
               ItemSeparatorComponent={ListSeparator}
+              onScrollBeginDrag={handleLogScrollBeginDrag(tab)}
+              onScrollEndDrag={handleLogScrollEndDrag(tab)}
+              onContentSizeChange={handleLogContentSizeChange(tab)}
             />
           </View>
         ))}
@@ -905,7 +1112,11 @@ function Container(props: VConsoleProps) {
           clearLogEntries();
         })}
         {renderActionButton('Top', scrollLogTop)}
-        {renderActionButton('Bottom', scrollLogBottom)}
+        {renderActionButton(
+          'Bottom',
+          scrollLogBottom,
+          autoFollowEnabled && logAutoFollowState[logSubTab]
+        )}
         {renderActionButton('Hide', closePanel)}
       </View>
     </View>
@@ -919,6 +1130,9 @@ function Container(props: VConsoleProps) {
         keyExtractor={(item) => `network-${item.id}`}
         renderItem={renderNetworkItem}
         ItemSeparatorComponent={ListSeparator}
+        onScrollBeginDrag={handleNetworkScrollBeginDrag}
+        onScrollEndDrag={handleNetworkScrollEndDrag}
+        onContentSizeChange={handleNetworkContentSizeChange}
       />
       <View style={styles.filterInputWrap}>
         <TextInput
@@ -934,7 +1148,11 @@ function Container(props: VConsoleProps) {
           clearNetworkEntries();
         })}
         {renderActionButton('Top', scrollNetworkTop)}
-        {renderActionButton('Bottom', scrollNetworkBottom)}
+        {renderActionButton(
+          'Bottom',
+          scrollNetworkBottom,
+          autoFollowEnabled && networkAutoFollowState
+        )}
         {renderActionButton('Hide', closePanel)}
       </View>
     </View>
@@ -1046,11 +1264,12 @@ function Container(props: VConsoleProps) {
 export function VConsole({
   enable = true,
   exclude = EMPTY_EXCLUDE,
+  autoFollow = false,
 }: VConsoleProps) {
   if (!enable) {
     return null;
   }
-  return <Container exclude={exclude} />;
+  return <Container exclude={exclude} autoFollow={autoFollow} />;
 }
 
 const styles = StyleSheet.create({
@@ -1257,6 +1476,7 @@ const styles = StyleSheet.create({
     color: '#111111',
     fontWeight: '600',
     marginBottom: 6,
+    marginRight: 36,
   },
   networkBlock: {
     marginTop: 2,
@@ -1309,6 +1529,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 7,
     alignItems: 'center',
+  },
+  actionButtonActive: {
+    borderColor: '#246BFD',
   },
   actionButtonText: {
     color: '#333333',

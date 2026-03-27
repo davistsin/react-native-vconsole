@@ -20,6 +20,7 @@ export default function App() {
       {/* your app content */}
       <VConsole
         enable={true}
+        autoFollow={true}
         exclude={{
           domains: ['localhost:8081'],
           ip: true,
@@ -35,6 +36,7 @@ export default function App() {
 | Prop | Type | Default | Description |
 | --- | --- | --- | --- |
 | `enable` | `boolean` | `true` | Whether to enable and render vConsole. |
+| `autoFollow` | `boolean` | `true` | Whether Log/Network lists auto-scroll to bottom on first open and when new entries arrive while follow mode is active. |
 | `exclude` | `{ domains?: string[]; ip?: boolean }` | `{}` | Network capture exclusion rules. |
 | `exclude.domains` | `string[]` | `[]` | Hosts to exclude from Network tab capture, keeping previous host-based matching behavior (e.g. `localhost:8081`). |
 | `exclude.ip` | `boolean` | `false` | When `true`, requests whose hostname is an IP address (IPv4/IPv6) will be skipped in Network tab capture. |
@@ -48,7 +50,8 @@ export default function App() {
 - Network tab captures `XMLHttpRequest` requests/responses without breaking original request behavior.
 - Network tab supports `Retry`, which replays a request with the original method/url/headers/body (excluding unsafe forbidden headers).
 - Network tab supports keyword filter (debounced) by request URL.
-- System/App tabs read info from native module bridges (`NativeModules.Vconsole`). Display System/App infomation.
+- `autoFollow` controls Log/Network bottom-follow behavior: on first open it scrolls to bottom, new entries auto-follow only when follow mode is active, dragging away from bottom pauses follow, and scrolling back to bottom or tapping `Bottom` re-enables follow (`autoFollow` must be `true`).
+- System/App tabs read info from native module bridges (`NativeModules.Vconsole`).
 
 <img src="./docs/snapshot/Simulator Screenshot - iPhone 17 Pro - 2026-03-27 at 01.22.36.png" width="360">
 <img src="./docs/snapshot/Simulator Screenshot - iPhone 17 Pro - 2026-03-27 at 01.22.57.png" width="360">
