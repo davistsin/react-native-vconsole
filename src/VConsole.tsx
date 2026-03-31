@@ -1221,7 +1221,9 @@ function Container(props: VConsoleProps) {
           {...panResponder.panHandlers}
         >
           <Pressable style={styles.floatingButton} onPress={openPanel}>
-            <Text style={styles.floatingButtonText}>vConsole</Text>
+            <Text pointerEvents="none" style={styles.floatingButtonText}>
+              vConsole
+            </Text>
           </Pressable>
         </Animated.View>
       ) : null}
