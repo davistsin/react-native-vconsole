@@ -753,38 +753,7 @@ function Container(props: VConsoleProps) {
     return () => clearTimeout(timer);
   }, [networkFilterInput]);
 
-  const panResponder = useMemo(
-    () =>
-      PanResponder.create({
-        onMoveShouldSetPanResponder: () => true,
-        onPanResponderGrant: () => {
-          dragPosition.stopAnimation((value) => {
-            dragStartPoint.current = { x: value.x, y: value.y };
-          });
-        },
-        onPanResponderMove: (_, gestureState) => {
-          const nextX = clamp(
-            dragStartPoint.current.x + gestureState.dx,
-            minX,
-            maxX
-          );
-          const nextY = clamp(
-            dragStartPoint.current.y + gestureState.dy,
-            minY,
-            maxY
-          );
-          dragPosition.setValue({ x: nextX, y: nextY });
-        },
-        onPanResponderRelease: () => {
-          dragPosition.stopAnimation((value) => {
-            dragStartPoint.current = { x: value.x, y: value.y };
-          });
-        },
-      }),
-    [dragPosition, maxX, maxY, minX, minY]
-  );
-
-  const openPanel = () => {
+  const openPanel = useCallback(() => {
     panelContentTaskRef.current?.cancel();
     panelContentTaskRef.current = null;
     setPanelVisible(true);
@@ -813,7 +782,7 @@ function Container(props: VConsoleProps) {
         }
       );
     });
-  };
+  }, [maskOpacity, panelHeight, panelTranslateY]);
 
   const closePanel = () => {
     panelContentTaskRef.current?.cancel();
@@ -837,6 +806,42 @@ function Container(props: VConsoleProps) {
       }
     });
   };
+
+  const panResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: () => true,
+        onPanResponderGrant: () => {
+          dragPosition.stopAnimation((value) => {
+            dragStartPoint.current = { x: value.x, y: value.y };
+          });
+        },
+        onPanResponderMove: (_, gestureState) => {
+          const nextX = clamp(
+            dragStartPoint.current.x + gestureState.dx,
+            minX,
+            maxX
+          );
+          const nextY = clamp(
+            dragStartPoint.current.y + gestureState.dy,
+            minY,
+            maxY
+          );
+          dragPosition.setValue({ x: nextX, y: nextY });
+        },
+        onPanResponderRelease: (_, gestureState) => {
+          const moveDistance = Math.hypot(gestureState.dx, gestureState.dy);
+          if (moveDistance <= 3) {
+            openPanel();
+          }
+          dragPosition.stopAnimation((value) => {
+            dragStartPoint.current = { x: value.x, y: value.y };
+          });
+        },
+      }),
+    [dragPosition, maxX, maxY, minX, minY, openPanel]
+  );
 
   const normalizedLogFilter = debouncedLogFilter.trim().toLowerCase();
   const normalizedNetworkFilter = debouncedNetworkFilter.trim().toLowerCase();
@@ -1220,11 +1225,11 @@ function Container(props: VConsoleProps) {
           ]}
           {...panResponder.panHandlers}
         >
-          <Pressable style={styles.floatingButton} onPress={openPanel}>
+          <View style={styles.floatingButton}>
             <Text pointerEvents="none" style={styles.floatingButtonText}>
               vConsole
             </Text>
-          </Pressable>
+          </View>
         </Animated.View>
       ) : null}
 
