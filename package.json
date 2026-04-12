@@ -1,6 +1,6 @@
 {
   "name": "react-native-vconsole",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "vconsole",
   "source": "./src/index.tsx",
   "main": "./lib/module/index.js",
