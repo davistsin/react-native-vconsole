@@ -9,11 +9,20 @@ import android.util.Log
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
+import com.facebook.react.bridge.ReadableMap
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.modules.network.NetworkingModule
 
 class VconsoleModule(reactContext: ReactApplicationContext) :
   ReactContextBaseJavaModule(reactContext) {
+
+  override fun initialize() {
+    super.initialize()
+    NetworkingModule.setCustomClientBuilder { builder ->
+      VconsoleNetworkConfig.apply(builder)
+    }
+  }
 
   override fun getName(): String {
     return NAME
@@ -85,6 +94,11 @@ class VconsoleModule(reactContext: ReactApplicationContext) :
       Log.e(NAME, "[getAppInfo] ${error.stackTraceToString()}")
       promise.reject("APP_INFO_ERROR", error)
     }
+  }
+
+  @ReactMethod
+  fun setNetworkConfig(config: ReadableMap?) {
+    VconsoleNetworkConfig.update(config)
   }
 
   companion object {

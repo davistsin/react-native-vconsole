@@ -1,36 +1,19 @@
 import type { NetworkEntry } from '../types';
+import type { NativeDNSRule, NativeHeaderRule } from '../networkConfig';
 
 type NetworkListener = (entries: NetworkEntry[]) => void;
-
-export type NetworkProxyRewriteRequest = {
-  method: string;
-  url: string;
-};
-
-export type NetworkProxyConfig = {
-  enabled?: boolean;
-  endpoint?: string;
-  headers?: Record<string, string>;
-  targetQueryName?: string;
-  includeHosts?: string[];
-  excludeHosts?: string[];
-  rewriteUrl?: (request: NetworkProxyRewriteRequest) => string | undefined;
-};
 
 type InstallXhrProxyOptions = {
   excludeHosts?: string[];
   excludeIp?: boolean;
-  proxy?: NetworkProxyConfig;
-};
-
-type NormalizedNetworkProxyConfig = {
-  enabled: boolean;
-  endpoint?: string;
-  headers: Record<string, string>;
-  targetQueryName: string;
-  includeHosts: Set<string>;
-  excludeHosts: Set<string>;
-  rewriteUrl?: (request: NetworkProxyRewriteRequest) => string | undefined;
+  customDNS?: {
+    enabled?: boolean;
+    rules?: NativeDNSRule[];
+  };
+  customHeaders?: {
+    enabled?: boolean;
+    headers?: NativeHeaderRule[];
+  };
 };
 
 const MAX_NETWORK_COUNT = 500;
@@ -43,13 +26,8 @@ let networkId = 1;
 let OriginalXHR: typeof XMLHttpRequest | undefined;
 let ignoredHosts = new Set<string>();
 let ignoredIpHost = false;
-let activeProxyConfig: NormalizedNetworkProxyConfig = {
-  enabled: false,
-  headers: {},
-  targetQueryName: 'url',
-  includeHosts: new Set<string>(),
-  excludeHosts: new Set<string>(),
-};
+let activeCustomDnsHosts = new Set<string>();
+let activeCustomHeaders: Record<string, string> = {};
 
 function normalizeHosts(hosts?: string[]): Set<string> {
   return new Set(
@@ -144,114 +122,43 @@ function shouldSkipNetworkCapture(rawUrl: string): boolean {
   return isIpAddressHostname(hostname);
 }
 
-function normalizeProxyConfig(
-  proxy?: NetworkProxyConfig
-): NormalizedNetworkProxyConfig {
-  return {
-    enabled: proxy?.enabled === true,
-    endpoint: proxy?.endpoint?.trim() || undefined,
-    headers: proxy?.headers ?? {},
-    targetQueryName: proxy?.targetQueryName?.trim() || 'url',
-    includeHosts: normalizeHosts(proxy?.includeHosts),
-    excludeHosts: normalizeHosts(proxy?.excludeHosts),
-    rewriteUrl: proxy?.rewriteUrl,
-  };
-}
-
-function getUrlOriginAndPath(rawUrl: string):
-  | {
-      origin: string;
-      pathname: string;
-    }
-  | undefined {
-  if (!/^https?:\/\//i.test(rawUrl)) {
-    return undefined;
-  }
-  try {
-    const parsed = new URL(rawUrl);
-    return {
-      origin: parsed.origin.toLowerCase(),
-      pathname: parsed.pathname,
-    };
-  } catch {
-    return undefined;
-  }
-}
-
-function isProxyEndpointUrl(rawUrl: string, endpoint?: string): boolean {
-  if (!endpoint) {
-    return false;
-  }
-  const requestTarget = getUrlOriginAndPath(rawUrl);
-  const proxyTarget = getUrlOriginAndPath(endpoint);
-  if (!requestTarget || !proxyTarget) {
-    return false;
-  }
-  return (
-    requestTarget.origin === proxyTarget.origin &&
-    requestTarget.pathname === proxyTarget.pathname
-  );
-}
-
-function shouldProxyRequest(rawUrl: string): boolean {
-  const config = activeProxyConfig;
-  if (!config.enabled || (!config.endpoint && !config.rewriteUrl)) {
-    return false;
-  }
-  if (isProxyEndpointUrl(rawUrl, config.endpoint)) {
-    return false;
-  }
-  const host = getHostFromUrl(rawUrl);
-  if (host && config.excludeHosts.has(host)) {
-    return false;
-  }
-  if (config.includeHosts.size > 0) {
-    return !!host && config.includeHosts.has(host);
-  }
-  return true;
-}
-
-function appendProxyTargetQuery(
-  endpoint: string,
-  targetQueryName: string,
-  originalUrl: string
-): string {
-  const separator = endpoint.includes('?') ? '&' : '?';
-  return `${endpoint}${separator}${encodeURIComponent(
-    targetQueryName
-  )}=${encodeURIComponent(originalUrl)}`;
-}
-
-function getProxyRequestUrl(
-  method: string,
-  originalUrl: string
-): string | undefined {
-  if (!shouldProxyRequest(originalUrl)) {
-    return undefined;
-  }
-  const config = activeProxyConfig;
-  const rewrittenUrl = config.rewriteUrl?.({
-    method,
-    url: originalUrl,
-  });
-  if (rewrittenUrl) {
-    return rewrittenUrl;
-  }
-  if (!config.endpoint) {
-    return undefined;
-  }
-  return appendProxyTargetQuery(
-    config.endpoint,
-    config.targetQueryName,
-    originalUrl
-  );
-}
-
-function getProxyHeaders(): Record<string, string> {
-  if (!activeProxyConfig.enabled) {
+function normalizeCustomHeaders(
+  customHeaders?: InstallXhrProxyOptions['customHeaders']
+): Record<string, string> {
+  if (customHeaders?.enabled !== true) {
     return {};
   }
-  return activeProxyConfig.headers;
+
+  return (customHeaders.headers ?? []).reduce<Record<string, string>>(
+    (result, header) => {
+      const key = header.key.trim();
+      if (!key) {
+        return result;
+      }
+      result[key] = header.value;
+      return result;
+    },
+    {}
+  );
+}
+
+function normalizeCustomDnsHosts(
+  customDNS?: InstallXhrProxyOptions['customDNS']
+): Set<string> {
+  if (customDNS?.enabled !== true) {
+    return new Set<string>();
+  }
+
+  return new Set(
+    (customDNS.rules ?? [])
+      .map((rule) => rule.domain.trim().toLowerCase())
+      .filter(Boolean)
+  );
+}
+
+function shouldMarkCustomDns(rawUrl: string): boolean {
+  const hostname = getHostnameFromUrl(rawUrl);
+  return hostname ? activeCustomDnsHosts.has(hostname) : false;
 }
 
 function getErrorMessage(error: unknown): string | undefined {
@@ -282,8 +189,6 @@ function markNetworkError(entry: NetworkEntry, reason: string) {
   entry.status = entry.status ?? 0;
   entry.isError = true;
   entry.errorReason = reason;
-  entry.responseHeaders = {};
-  entry.responseData = undefined;
 }
 
 function notify() {
@@ -426,10 +331,86 @@ function parseHeaders(rawHeaders?: string | null): Record<string, string> {
   return result;
 }
 
+function normalizeReadablePayload(value: unknown): unknown {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value === 'string' && value.length === 0) {
+    return undefined;
+  }
+  return value;
+}
+
+function parseJsonText(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+function readErrorResponseData(
+  xhr: XMLHttpRequest,
+  responseHeaders: Record<string, string>
+): unknown | Promise<unknown> {
+  try {
+    const parsedData = parseResponseData(xhr, responseHeaders);
+    if (isPromiseLike(parsedData)) {
+      return parsedData.then((resolved) => normalizeReadablePayload(resolved));
+    }
+    const normalized = normalizeReadablePayload(parsedData);
+    if (normalized !== undefined) {
+      return normalized;
+    }
+  } catch {
+    // Fall through to response fallback.
+  }
+
+  try {
+    const response = xhr.response;
+    if (typeof response === 'string') {
+      return normalizeReadablePayload(parseJsonText(response));
+    }
+    return normalizeReadablePayload(response);
+  } catch {
+    return undefined;
+  }
+}
+
+function captureErrorResponse(entry: NetworkEntry, xhr: XMLHttpRequest) {
+  try {
+    entry.responseHeaders = parseHeaders(xhr.getAllResponseHeaders());
+  } catch {
+    entry.responseHeaders = {};
+  }
+
+  try {
+    const parsedData = readErrorResponseData(xhr, entry.responseHeaders);
+    if (isPromiseLike(parsedData)) {
+      entry.responseData = '[Parsing blob response...]';
+      notify();
+      parsedData
+        .then((resolved) => {
+          entry.responseData = normalizeReadablePayload(resolved);
+          notify();
+        })
+        .catch(() => {
+          entry.responseData = '[Blob response]';
+          notify();
+        });
+      return;
+    }
+    entry.responseData = normalizeReadablePayload(parsedData);
+  } catch {
+    entry.responseData = undefined;
+  }
+}
+
 export function installXhrProxy(options?: InstallXhrProxyOptions) {
   ignoredHosts = normalizeHosts(options?.excludeHosts);
   ignoredIpHost = options?.excludeIp === true;
-  activeProxyConfig = normalizeProxyConfig(options?.proxy);
+  activeCustomDnsHosts = normalizeCustomDnsHosts(options?.customDNS);
+  activeCustomHeaders = normalizeCustomHeaders(options?.customHeaders);
 
   if (isInstalled || typeof XMLHttpRequest === 'undefined') {
     return;
@@ -445,13 +426,10 @@ export function installXhrProxy(options?: InstallXhrProxyOptions) {
     private _requestHeaders: Record<string, string> = {};
     private _method = 'GET';
     private _url = '';
-    private _originalUrl: string | undefined;
 
     open(method: string, url: string, ...rest: unknown[]) {
       this._method = (method || 'GET').toUpperCase();
-      const proxiedUrl = getProxyRequestUrl(this._method, url);
-      this._originalUrl = proxiedUrl ? url : undefined;
-      this._url = proxiedUrl ?? url;
+      this._url = url;
       return super.open(method, this._url, ...(rest as []));
     }
 
@@ -461,18 +439,11 @@ export function installXhrProxy(options?: InstallXhrProxyOptions) {
     }
 
     send(body?: unknown) {
-      if (this._originalUrl) {
-        Object.entries(getProxyHeaders()).forEach(([header, value]) => {
-          this._requestHeaders[header] = value;
-          try {
-            super.setRequestHeader(header, value);
-          } catch {
-            // Ignore invalid proxy headers so the original request flow continues.
-          }
-        });
-      }
+      Object.entries(activeCustomHeaders).forEach(([header, value]) => {
+        this._requestHeaders[header] = value;
+      });
 
-      if (shouldSkipNetworkCapture(this._originalUrl ?? this._url)) {
+      if (shouldSkipNetworkCapture(this._url)) {
         return super.send(body as never);
       }
 
@@ -480,7 +451,7 @@ export function installXhrProxy(options?: InstallXhrProxyOptions) {
         id: networkId++,
         method: this._method,
         url: this._url,
-        originalUrl: this._originalUrl,
+        usedCustomDns: shouldMarkCustomDns(this._url),
         startedAt: Date.now(),
         requestHeaders: { ...this._requestHeaders },
         requestBody: body ?? undefined,
@@ -504,7 +475,7 @@ export function installXhrProxy(options?: InstallXhrProxyOptions) {
 
         // Some internal RN/Metro requests start as relative paths (e.g. /symbolicate).
         // Re-check with responseURL at completion to apply host filters correctly.
-        const finalUrl = this._originalUrl ?? this.responseURL ?? this._url;
+        const finalUrl = this.responseURL || this._url;
         if (shouldSkipNetworkCapture(finalUrl)) {
           const index = entries.findIndex((item) => item.id === this._entryId);
           if (index >= 0) {
@@ -529,6 +500,7 @@ export function installXhrProxy(options?: InstallXhrProxyOptions) {
           current.responseHeaders = {};
         }
         if (this.status === 0) {
+          captureErrorResponse(current, this);
           const reason = isInvalidHttpUrl(this._url)
             ? `Invalid URL: ${this._url}`
             : 'Network request failed';
@@ -567,6 +539,7 @@ export function installXhrProxy(options?: InstallXhrProxyOptions) {
         current.finishedAt = current.finishedAt ?? Date.now();
         current.durationMs =
           current.durationMs ?? current.finishedAt - current.startedAt;
+        captureErrorResponse(current, this);
         markNetworkError(
           current,
           this.timeout > 0
@@ -584,6 +557,7 @@ export function installXhrProxy(options?: InstallXhrProxyOptions) {
         current.finishedAt = current.finishedAt ?? Date.now();
         current.durationMs =
           current.durationMs ?? current.finishedAt - current.startedAt;
+        captureErrorResponse(current, this);
         const reason = isInvalidHttpUrl(this._url)
           ? `Invalid URL: ${this._url}`
           : 'Network request failed';
@@ -599,6 +573,7 @@ export function installXhrProxy(options?: InstallXhrProxyOptions) {
         current.finishedAt = current.finishedAt ?? Date.now();
         current.durationMs =
           current.durationMs ?? current.finishedAt - current.startedAt;
+        captureErrorResponse(current, this);
         markNetworkError(current, 'Request aborted');
         notify();
       });

@@ -32,12 +32,14 @@ export default function App() {
           domains: ['localhost:8081'],
           ip: true,
         }}
-        proxy={{
-          defaultEnable: false,
-          endpoint: 'https://proxy.example.com/debug',
-          targetQueryName: 'url',
-          headers: {
-            'x-debug-proxy': '1',
+        network={{
+          customDNS: {
+            enabled: false,
+            rules: [{ domain: 'api.example.com', ip: '192.168.0.1' }],
+          },
+          customHeaders: {
+            enabled: true,
+            headers: [{ key: 'x-debug-token', value: 'demo-token' }],
           },
         }}
       />
@@ -56,20 +58,22 @@ export default function App() {
 | `exclude` | `{ domains?: string[]; ip?: boolean }` | `{}` | Network capture exclusion rules. |
 | `exclude.domains` | `string[]` | `[]` | Hosts to exclude from Network tab capture, keeping previous host-based matching behavior (e.g. `localhost:8081`). |
 | `exclude.ip` | `boolean` | `false` | When `true`, requests whose hostname is an IP address (IPv4/IPv6) will be skipped in Network tab capture. |
-| `proxy` | `{ defaultEnable?: boolean; endpoint?: string; targetQueryName?: string; headers?: Record<string, string>; includeHosts?: string[]; excludeHosts?: string[]; rewriteUrl?: ({ method, url }) => string \| undefined }` | `undefined` | JS-layer request rewrite proxy for captured XHR requests. `defaultEnable` only controls the initial state; the System tab proxy switch controls runtime state. |
+| `network` | `{ customDNS?: { enabled?: boolean; rules?: Array<{ domain?: string; ip?: string }> }; customHeaders?: { enabled?: boolean; headers?: Array<{ key?: string; value?: string }> }; forwardProxy?: { enabled?: boolean; endpoint?: string } }` | `undefined` | Runtime-editable network settings shown in the `Setting` tab. This release implements `customDNS` and `customHeaders`; `forwardProxy` is reserved for a later release. |
 
 ## Features
 
 - Draggable floating button (`vConsole`) with screen-boundary constraints.
-- Bottom sheet panel (7/9 screen height) with `Log / Network / System / App` tabs.
+- Bottom sheet panel (7/9 screen height) with `Log / Network / System / App / Setting` tabs.
 - Log tab captures `console.log/info/warn/error` without breaking original console behavior.
 - Log tab supports keyword filter (debounced) across log text content.
 - Network tab captures `XMLHttpRequest` requests/responses without breaking original request behavior.
-- Network tab can rewrite requests through a JS-layer proxy. When proxy rewrite is active, Network entries show both the actual request URL and the original URL.
+- Setting tab lets you toggle and edit `customDNS` and `customHeaders` rows at runtime.
+- Android applies `customDNS` to React Native JS requests through `NetworkingModule`'s `OkHttp` client.
+- iOS applies `customHeaders` and best-effort host override handling to React Native JS requests through a custom native request chain.
 - Network tab supports `Retry`, which replays a request with the original method/url/headers/body (excluding unsafe forbidden headers).
 - Network tab supports keyword filter (debounced) by request URL.
 - `autoFollow` controls Log/Network bottom-follow behavior: on first open it scrolls to bottom, new entries auto-follow only when follow mode is active, dragging away from bottom pauses follow, and scrolling back to bottom or tapping `Bottom` re-enables follow (`autoFollow` must be `true`).
-- System/App tabs read info from native module bridges (`NativeModules.Vconsole`).
+- App tab reads info from native module bridges (`NativeModules.Vconsole`).
 
 <img src="./docs/snapshot/Simulator Screenshot - iPhone 17 Pro - 2026-03-27 at 01.22.36.png" width="360">
 <img src="./docs/snapshot/Simulator Screenshot - iPhone 17 Pro - 2026-03-27 at 01.22.57.png" width="360">

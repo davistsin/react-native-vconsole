@@ -1,11 +1,15 @@
 import { NativeModules, Platform } from 'react-native';
 import { VConsole } from './VConsole';
 import type { AppInfo, SystemInfo } from './types';
+import type { VConsoleFloatingButtonStyle, VConsoleProps } from './VConsole';
 import type {
-  VConsoleFloatingButtonStyle,
-  VConsoleProps,
-  VConsoleProxyConfig,
-} from './VConsole';
+  VConsoleCustomDNSConfig,
+  VConsoleCustomHeadersConfig,
+  VConsoleDNSRule,
+  VConsoleForwardProxyConfig,
+  VConsoleHeaderRule,
+  VConsoleNetworkConfig,
+} from './networkConfig';
 
 const LINKING_ERROR =
   `The package 'react-native-vconsole' doesn't seem to be linked. Make sure: \n\n` +
@@ -36,7 +40,12 @@ export { VConsole };
 export type {
   AppInfo,
   SystemInfo,
+  VConsoleCustomDNSConfig,
+  VConsoleCustomHeadersConfig,
+  VConsoleDNSRule,
   VConsoleFloatingButtonStyle,
+  VConsoleForwardProxyConfig,
+  VConsoleHeaderRule,
+  VConsoleNetworkConfig,
   VConsoleProps,
-  VConsoleProxyConfig,
 };

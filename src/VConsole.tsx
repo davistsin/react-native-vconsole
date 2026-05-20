@@ -4,6 +4,7 @@ import {
   Clipboard,
   Dimensions,
   FlatList,
+  Image,
   InteractionManager,
   Keyboard,
   NativeModules,
@@ -35,10 +36,20 @@ import {
   clearNetworkEntries,
   getNetworkEntries,
   installXhrProxy,
-  type NetworkProxyConfig,
   subscribeNetworkEntries,
   uninstallXhrProxy,
 } from './core/xhrProxy';
+import {
+  buildNativeNetworkConfig,
+  createEmptyDnsRule,
+  createEmptyHeaderRule,
+  type NativeNetworkConfig,
+  type VConsoleCustomDNSConfig,
+  type VConsoleCustomHeadersConfig,
+  type VConsoleDNSRule,
+  type VConsoleHeaderRule,
+  type VConsoleNetworkConfig,
+} from './networkConfig';
 import type {
   AppInfo,
   LogEntry,
@@ -55,10 +66,11 @@ const PANEL_ANIMATION_DURATION_MS = 220;
 const PANEL_MASK_MAX_OPACITY = 0.25;
 const EMPTY_EXCLUDE: VConsoleExclude = {};
 const LOG_SUB_TABS: LogFilterTab[] = ['All', 'log', 'info', 'warn', 'error'];
-const ROOT_TABS: VConsoleTab[] = ['Log', 'Network', 'System', 'App'];
+const ROOT_TABS: VConsoleTab[] = ['Log', 'Network', 'System', 'App', 'Setting'];
 const NETWORK_DURATION_WARN_THRESHOLD_MS = 1000;
 const NETWORK_DURATION_SEVERE_THRESHOLD_MS = 3000;
 const AUTO_SCROLL_BOTTOM_THRESHOLD = 24;
+const CUSTOM_DNS_REQUEST_ICON = require('./assets/images/vconsole-custom-request.png');
 
 const LOG_THEME = {
   log: { backgroundColor: '#FFFFFF', color: '#111111' },
@@ -72,23 +84,20 @@ type ExpandedMap = Record<string, boolean>;
 type NativeModuleShape = {
   getSystemInfo?: () => Promise<SystemInfo>;
   getAppInfo?: () => Promise<AppInfo>;
+  setNetworkConfig?: (config: NativeNetworkConfig) => void;
 };
 
 export type VConsoleProps = {
   enable?: boolean;
   exclude?: VConsoleExclude;
   autoFollow?: boolean;
-  proxy?: VConsoleProxyConfig;
+  network?: VConsoleNetworkConfig;
   style?: VConsoleFloatingButtonStyle;
 };
 
 type VConsoleExclude = {
   domains?: string[];
   ip?: boolean;
-};
-
-export type VConsoleProxyConfig = Omit<NetworkProxyConfig, 'enabled'> & {
-  defaultEnable?: boolean;
 };
 
 export type VConsoleFloatingButtonStyle = {
@@ -101,6 +110,29 @@ export type VConsoleFloatingButtonStyle = {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
+}
+
+function createInitialDnsRules(
+  config?: VConsoleCustomDNSConfig
+): VConsoleDNSRule[] {
+  return config?.rules?.length ? config.rules : [createEmptyDnsRule()];
+}
+
+function createInitialHeaderRules(
+  config?: VConsoleCustomHeadersConfig
+): VConsoleHeaderRule[] {
+  return config?.headers?.length ? config.headers : [createEmptyHeaderRule()];
+}
+
+function formatMemorySize(bytes: unknown): string {
+  if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes < 0) {
+    return '-';
+  }
+  const mb = bytes / (1024 * 1024);
+  if (mb >= 1024) {
+    return `${(mb / 1024).toFixed(2)} GB`;
+  }
+  return `${mb.toFixed(2)} MB`;
 }
 
 function getPositiveNumber(value: unknown, fallback: number): number {
@@ -138,17 +170,6 @@ function copyToClipboardWithFeedback(value: string) {
   }
 }
 
-function formatMemorySize(bytes: unknown): string {
-  if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes < 0) {
-    return '-';
-  }
-  const mb = bytes / (1024 * 1024);
-  if (mb >= 1024) {
-    return `${(mb / 1024).toFixed(2)} GB`;
-  }
-  return `${mb.toFixed(2)} MB`;
-}
-
 function formatLogTime(timestamp: number): string {
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) {
@@ -180,6 +201,22 @@ function prettyText(value: unknown): string {
 
 function isNetworkErrorEntry(item: NetworkEntry): boolean {
   return item.isError === true;
+}
+
+function hasVisibleNetworkValue(value: unknown): boolean {
+  if (value === null || value === undefined) {
+    return false;
+  }
+  if (typeof value === 'string') {
+    return value.length > 0;
+  }
+  if (Array.isArray(value)) {
+    return value.length > 0;
+  }
+  if (typeof value === 'object') {
+    return Object.keys(value as Record<string, unknown>).length > 0;
+  }
+  return true;
 }
 
 function getNetworkItemBackgroundColor(item: NetworkEntry): string | undefined {
@@ -215,14 +252,16 @@ function buildNetworkCopyText(item: NetworkEntry): string {
     `request body\n${prettyText(item.requestBody)}`,
   ];
 
-  if (item.originalUrl) {
-    segments.splice(1, 0, `original url ${item.originalUrl}`);
-  }
-
   if (isError) {
     segments.push(
       `error reason\n${item.errorReason ?? 'Network request failed'}`
     );
+    if (hasVisibleNetworkValue(item.responseHeaders)) {
+      segments.push(`response headers\n${prettyText(item.responseHeaders)}`);
+    }
+    if (hasVisibleNetworkValue(item.responseData)) {
+      segments.push(`response data\n${prettyText(item.responseData)}`);
+    }
   } else {
     segments.push(`response headers\n${prettyText(item.responseHeaders)}`);
     segments.push(`response data\n${prettyText(item.responseData)}`);
@@ -462,6 +501,8 @@ const NetworkListItem = function NetworkListItem({
   const isError = isNetworkErrorEntry(item);
   const backgroundColor = getNetworkItemBackgroundColor(item);
   const startedTime = formatLogTime(item.startedAt);
+  const hasErrorResponseHeaders = hasVisibleNetworkValue(item.responseHeaders);
+  const hasErrorResponseData = hasVisibleNetworkValue(item.responseData);
 
   const onToggleNode = useCallback((key: string) => {
     setExpandedMap((prev) => ({
@@ -475,14 +516,17 @@ const NetworkListItem = function NetworkListItem({
       style={[styles.listItem, backgroundColor ? { backgroundColor } : null]}
     >
       <View style={styles.listItemMain}>
-        <Text style={styles.networkTitle}>
-          {item.method} {item.url}
-        </Text>
-        {item.originalUrl ? (
-          <Text style={styles.networkLabel}>
-            Original URL: {item.originalUrl}
+        <View style={styles.networkTitleRow}>
+          {item.usedCustomDns ? (
+            <Image
+              source={CUSTOM_DNS_REQUEST_ICON}
+              style={styles.networkCustomDnsIcon}
+            />
+          ) : null}
+          <Text style={styles.networkTitle}>
+            {item.method} {item.url}
           </Text>
-        ) : null}
+        </View>
         <Text style={styles.networkLabel}>
           Time: {startedTime}
           {'   '}
@@ -516,6 +560,30 @@ const NetworkListItem = function NetworkListItem({
             <Text style={styles.networkErrorText}>
               {item.errorReason ?? 'Network request failed'}
             </Text>
+            {hasErrorResponseHeaders ? (
+              <View style={styles.networkBlock}>
+                <Text style={styles.networkLabel}>Response Headers</Text>
+                <ObjectTree
+                  value={item.responseHeaders}
+                  nodeKey={`${item.id}.responseHeaders`}
+                  expandedMap={expandedMap}
+                  onToggle={onToggleNode}
+                />
+              </View>
+            ) : null}
+            {hasErrorResponseData ? (
+              <View style={styles.networkBlock}>
+                <Text style={styles.networkLabel}>Response Data</Text>
+                <ScrollView horizontal={true}>
+                  <ObjectTree
+                    value={item.responseData}
+                    nodeKey={`${item.id}.responseData`}
+                    expandedMap={expandedMap}
+                    onToggle={onToggleNode}
+                  />
+                </ScrollView>
+              </View>
+            ) : null}
           </View>
         ) : (
           <>
@@ -582,7 +650,7 @@ function useFlatListRefs() {
 }
 
 function Container(props: VConsoleProps) {
-  const { exclude = EMPTY_EXCLUDE, autoFollow, proxy, style } = props;
+  const { exclude = EMPTY_EXCLUDE, autoFollow, network, style } = props;
   const autoFollowEnabled = autoFollow === true;
   const nativeModule = NativeModules.Vconsole as NativeModuleShape | undefined;
   const { width, height } = Dimensions.get('window');
@@ -630,13 +698,19 @@ function Container(props: VConsoleProps) {
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
-  const [proxyEnabled, setProxyEnabled] = useState(
-    () => proxy?.defaultEnable === true
+  const [dnsEnabled, setDnsEnabled] = useState(
+    () => network?.customDNS?.enabled === true
   );
-  const [proxyEndpointInput, setProxyEndpointInput] = useState(
-    () => proxy?.endpoint ?? ''
+  const [headerEnabled, setHeaderEnabled] = useState(
+    () => network?.customHeaders?.enabled === true
   );
-  const [proxyEndpointFocused, setProxyEndpointFocused] = useState(false);
+  const [dnsRules, setDnsRules] = useState<VConsoleDNSRule[]>(() =>
+    createInitialDnsRules(network?.customDNS)
+  );
+  const [headerRules, setHeaderRules] = useState<VConsoleHeaderRule[]>(() =>
+    createInitialHeaderRules(network?.customHeaders)
+  );
+  const [settingInputFocused, setSettingInputFocused] = useState(false);
 
   const panelHeight = Math.floor(height * PANEL_HEIGHT_RATIO);
   const panelTranslateY = useRef(new Animated.Value(panelHeight)).current;
@@ -680,21 +754,25 @@ function Container(props: VConsoleProps) {
     [exclude.domains]
   );
   const shouldExcludeIp = exclude.ip === true;
-  const normalizedProxyEndpoint = proxyEndpointInput.trim();
-  const panelKeyboardOffset = proxyEndpointFocused ? 0 : keyboardHeight;
-  const hasProxyConfig =
-    !!proxy?.rewriteUrl || normalizedProxyEndpoint.length > 0;
-  const effectiveProxy = useMemo<NetworkProxyConfig | undefined>(() => {
-    return {
-      endpoint: normalizedProxyEndpoint || undefined,
-      headers: proxy?.headers,
-      targetQueryName: proxy?.targetQueryName,
-      includeHosts: proxy?.includeHosts,
-      excludeHosts: proxy?.excludeHosts,
-      rewriteUrl: proxy?.rewriteUrl,
-      enabled: proxyEnabled,
-    };
-  }, [normalizedProxyEndpoint, proxy, proxyEnabled]);
+  const panelKeyboardOffset = settingInputFocused ? 0 : keyboardHeight;
+  const effectiveNetwork = useMemo<VConsoleNetworkConfig>(
+    () => ({
+      customDNS: {
+        enabled: dnsEnabled,
+        rules: dnsRules,
+      },
+      customHeaders: {
+        enabled: headerEnabled,
+        headers: headerRules,
+      },
+      forwardProxy: network?.forwardProxy,
+    }),
+    [dnsEnabled, dnsRules, headerEnabled, headerRules, network?.forwardProxy]
+  );
+  const nativeNetworkConfig = useMemo(
+    () => buildNativeNetworkConfig(effectiveNetwork),
+    [effectiveNetwork]
+  );
 
   const setLogAutoFollow = useCallback(
     (tab: LogFilterTab, enabled: boolean) => {
@@ -733,7 +811,8 @@ function Container(props: VConsoleProps) {
     installXhrProxy({
       excludeHosts: normalizedExcludeDomains,
       excludeIp: shouldExcludeIp,
-      proxy: effectiveProxy,
+      customDNS: nativeNetworkConfig.customDNS,
+      customHeaders: nativeNetworkConfig.customHeaders,
     });
 
     const unsubscribeLog = subscribeLogEntries(setLogEntries);
@@ -747,7 +826,16 @@ function Container(props: VConsoleProps) {
       uninstallConsoleProxy();
       uninstallXhrProxy();
     };
-  }, [effectiveProxy, normalizedExcludeDomains, shouldExcludeIp]);
+  }, [
+    nativeNetworkConfig.customDNS,
+    nativeNetworkConfig.customHeaders,
+    normalizedExcludeDomains,
+    shouldExcludeIp,
+  ]);
+
+  useEffect(() => {
+    nativeModule?.setNetworkConfig?.(nativeNetworkConfig);
+  }, [nativeModule, nativeNetworkConfig]);
 
   useEffect(() => {
     dragPosition.stopAnimation((value) => {
@@ -920,9 +1008,7 @@ function Container(props: VConsoleProps) {
       return networkEntries;
     }
     return networkEntries.filter((item) =>
-      `${item.url} ${item.originalUrl ?? ''}`
-        .toLowerCase()
-        .includes(normalizedNetworkFilter)
+      item.url.toLowerCase().includes(normalizedNetworkFilter)
     );
   }, [networkEntries, normalizedNetworkFilter]);
 
@@ -1122,6 +1208,50 @@ function Container(props: VConsoleProps) {
     return <NetworkListItem item={item} />;
   };
 
+  const updateDnsRule = useCallback(
+    (index: number, field: keyof VConsoleDNSRule, value: string) => {
+      setDnsRules((prev) =>
+        prev.map((rule, currentIndex) =>
+          currentIndex === index ? { ...rule, [field]: value } : rule
+        )
+      );
+    },
+    []
+  );
+
+  const updateHeaderRule = useCallback(
+    (index: number, field: keyof VConsoleHeaderRule, value: string) => {
+      setHeaderRules((prev) =>
+        prev.map((rule, currentIndex) =>
+          currentIndex === index ? { ...rule, [field]: value } : rule
+        )
+      );
+    },
+    []
+  );
+
+  const appendDnsRule = useCallback(() => {
+    setDnsRules((prev) => [...prev, createEmptyDnsRule()]);
+  }, []);
+
+  const appendHeaderRule = useCallback(() => {
+    setHeaderRules((prev) => [...prev, createEmptyHeaderRule()]);
+  }, []);
+
+  const removeDnsRule = useCallback((index: number) => {
+    setDnsRules((prev) => {
+      const next = prev.filter((_, currentIndex) => currentIndex !== index);
+      return next.length > 0 ? next : [createEmptyDnsRule()];
+    });
+  }, []);
+
+  const removeHeaderRule = useCallback((index: number) => {
+    setHeaderRules((prev) => {
+      const next = prev.filter((_, currentIndex) => currentIndex !== index);
+      return next.length > 0 ? next : [createEmptyHeaderRule()];
+    });
+  }, []);
+
   const renderLogPanel = (visible: boolean) => (
     <View style={[styles.contentArea, visible ? {} : styles.hidden]}>
       <View style={styles.subTabRow}>
@@ -1225,81 +1355,161 @@ function Container(props: VConsoleProps) {
     </View>
   );
 
-  const renderProxyControl = () => (
-    <View style={styles.proxyControlCard}>
-      <View style={styles.proxyControlRow}>
-        <View style={styles.proxyControlTextWrap}>
-          <Text style={styles.infoText}>Proxy</Text>
-          <Text style={styles.infoSubText}>
-            Status: {proxyEnabled ? 'On' : 'Off'}
-          </Text>
-        </View>
-        <Switch
-          value={proxyEnabled}
-          onValueChange={setProxyEnabled}
-          trackColor={{ false: '#D9D9D9', true: '#8DB2FF' }}
-          thumbColor={proxyEnabled ? '#246BFD' : '#FFFFFF'}
-          ios_backgroundColor="#D9D9D9"
-        />
+  const renderSettingSectionHeader = (
+    title: string,
+    enabled: boolean,
+    onToggle: (nextValue: boolean) => void,
+    onAdd: () => void
+  ) => (
+    <View style={styles.settingSectionHeader}>
+      <View style={styles.settingSectionTitleWrap}>
+        <Text style={styles.settingSectionTitle}>{title}</Text>
       </View>
-      <View style={styles.proxyInputSection}>
-        <Text style={styles.proxyInputLabel}>Endpoint</Text>
-        <TextInput
-          style={styles.proxyInput}
-          value={proxyEndpointInput}
-          onChangeText={setProxyEndpointInput}
-          onFocus={() => setProxyEndpointFocused(true)}
-          onBlur={() => setProxyEndpointFocused(false)}
-          placeholder="https://proxy.example.com/debug"
-          placeholderTextColor="#999999"
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
-        {!hasProxyConfig ? (
-          <Text style={styles.proxyHintText}>
-            Enter an endpoint or provide `rewriteUrl` from props.
-          </Text>
-        ) : null}
+      <Switch
+        value={enabled}
+        onValueChange={onToggle}
+        trackColor={{ false: '#D9D9D9', true: '#8DB2FF' }}
+        thumbColor={enabled ? '#246BFD' : '#FFFFFF'}
+        ios_backgroundColor="#D9D9D9"
+      />
+      <Pressable style={styles.settingAddButton} onPress={onAdd}>
+        <Text style={styles.settingAddButtonText}>+</Text>
+      </Pressable>
+    </View>
+  );
+
+  const renderSettingPanel = (visible: boolean) => (
+    <View style={[styles.contentArea, visible ? {} : styles.hidden]}>
+      <ScrollView
+        contentContainerStyle={styles.settingScrollContent}
+        keyboardShouldPersistTaps="handled"
+      >
+        <View style={styles.settingSectionCard}>
+          <Text style={styles.settingGroupTitle}>Network</Text>
+          <View style={styles.settingSubSection}>
+            {renderSettingSectionHeader(
+              'DNS',
+              dnsEnabled,
+              setDnsEnabled,
+              appendDnsRule
+            )}
+            {dnsRules.map((rule, index) => (
+              <View key={`dns-${index}`} style={styles.settingRuleRow}>
+                <TextInput
+                  style={[styles.settingInput, styles.settingInputHalf]}
+                  value={rule.domain ?? ''}
+                  onChangeText={(value) =>
+                    updateDnsRule(index, 'domain', value)
+                  }
+                  onFocus={() => setSettingInputFocused(true)}
+                  onBlur={() => setSettingInputFocused(false)}
+                  placeholder="api.example.com"
+                  placeholderTextColor="#999999"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                <TextInput
+                  style={[styles.settingInput, styles.settingInputHalf]}
+                  value={rule.ip ?? ''}
+                  onChangeText={(value) => updateDnsRule(index, 'ip', value)}
+                  onFocus={() => setSettingInputFocused(true)}
+                  onBlur={() => setSettingInputFocused(false)}
+                  placeholder="192.168.0.1"
+                  placeholderTextColor="#999999"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                <Pressable
+                  style={styles.settingRowDeleteButton}
+                  onPress={() => removeDnsRule(index)}
+                >
+                  <Text style={styles.settingRowDeleteButtonText}>-</Text>
+                </Pressable>
+              </View>
+            ))}
+          </View>
+          <View style={styles.settingSubSection}>
+            {renderSettingSectionHeader(
+              'Headers',
+              headerEnabled,
+              setHeaderEnabled,
+              appendHeaderRule
+            )}
+            {headerRules.map((rule, index) => (
+              <View key={`header-${index}`} style={styles.settingRuleRow}>
+                <TextInput
+                  style={[styles.settingInput, styles.settingInputHalf]}
+                  value={rule.key ?? ''}
+                  onChangeText={(value) =>
+                    updateHeaderRule(index, 'key', value)
+                  }
+                  onFocus={() => setSettingInputFocused(true)}
+                  onBlur={() => setSettingInputFocused(false)}
+                  placeholder="x-debug-key"
+                  placeholderTextColor="#999999"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                <TextInput
+                  style={[styles.settingInput, styles.settingInputHalf]}
+                  value={rule.value ?? ''}
+                  onChangeText={(value) =>
+                    updateHeaderRule(index, 'value', value)
+                  }
+                  onFocus={() => setSettingInputFocused(true)}
+                  onBlur={() => setSettingInputFocused(false)}
+                  placeholder="value"
+                  placeholderTextColor="#999999"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                <Pressable
+                  style={styles.settingRowDeleteButton}
+                  onPress={() => removeHeaderRule(index)}
+                >
+                  <Text style={styles.settingRowDeleteButtonText}>-</Text>
+                </Pressable>
+              </View>
+            ))}
+          </View>
+        </View>
+      </ScrollView>
+      <View style={styles.actionsRow}>
+        {renderActionButton('Hide', closePanel)}
       </View>
     </View>
   );
 
   const renderSystemPanel = (visible: boolean) => (
     <View style={[styles.contentArea, visible ? {} : styles.hidden]}>
-      <ScrollView
-        contentContainerStyle={styles.systemScrollContent}
-        keyboardShouldPersistTaps="handled"
-      >
-        {renderProxyControl()}
-        <View style={styles.infoCard}>
+      <View style={[styles.infoCard, styles.infoCardFill]}>
+        <Text style={styles.infoText}>
+          Brand: {systemInfo?.manufacturer ?? '-'}
+        </Text>
+        <Text style={styles.infoText}>Model: {systemInfo?.model ?? '-'}</Text>
+        <Text style={styles.infoText}>
+          System Version: {Platform.OS === 'android' ? 'Android' : 'iOS'}{' '}
+          {systemInfo?.osVersion ?? '-'}
+        </Text>
+        {Platform.OS === 'android' ? (
           <Text style={styles.infoText}>
-            Brand: {systemInfo?.manufacturer ?? '-'}
+            Network Type: {systemInfo?.networkType ?? '-'}
           </Text>
-          <Text style={styles.infoText}>Model: {systemInfo?.model ?? '-'}</Text>
+        ) : null}
+        {Platform.OS === 'android' ? (
           <Text style={styles.infoText}>
-            System Version: {Platform.OS === 'android' ? 'Android' : 'iOS'}{' '}
-            {systemInfo?.osVersion ?? '-'}
+            Network Reachable: {systemInfo?.isNetworkReachable ?? 'unknown'}
           </Text>
-          {Platform.OS === 'android' ? (
-            <Text style={styles.infoText}>
-              Network Type: {systemInfo?.networkType ?? '-'}
-            </Text>
-          ) : null}
-          {Platform.OS === 'android' ? (
-            <Text style={styles.infoText}>
-              Network Reachable: {systemInfo?.isNetworkReachable ?? 'unknown'}
-            </Text>
-          ) : null}
+        ) : null}
+        <Text style={styles.infoText}>
+          Total Memory: {formatMemorySize(systemInfo?.totalMemory)}
+        </Text>
+        {Platform.OS === 'android' ? (
           <Text style={styles.infoText}>
-            Total Memory: {formatMemorySize(systemInfo?.totalMemory)}
+            Available Memory: {formatMemorySize(systemInfo?.availableMemory)}
           </Text>
-          {Platform.OS === 'android' ? (
-            <Text style={styles.infoText}>
-              Available Memory: {formatMemorySize(systemInfo?.availableMemory)}
-            </Text>
-          ) : null}
-        </View>
-      </ScrollView>
+        ) : null}
+      </View>
       <View style={styles.actionsRow}>
         {renderActionButton('Hide', closePanel)}
       </View>
@@ -1377,6 +1587,7 @@ function Container(props: VConsoleProps) {
                 {renderLogPanel(activeTab === 'Log')}
                 {renderNetworkPanel(activeTab === 'Network')}
                 {renderSystemPanel(activeTab === 'System')}
+                {renderSettingPanel(activeTab === 'Setting')}
                 {renderAppPanel(activeTab === 'App')}
               </>
             ) : (
@@ -1395,7 +1606,7 @@ export function VConsole({
   enable = true,
   exclude = EMPTY_EXCLUDE,
   autoFollow = false,
-  proxy,
+  network,
   style,
 }: VConsoleProps) {
   if (!enable) {
@@ -1405,7 +1616,7 @@ export function VConsole({
     <Container
       exclude={exclude}
       autoFollow={autoFollow}
-      proxy={proxy}
+      network={network}
       style={style}
     />
   );
@@ -1610,12 +1821,23 @@ const styles = StyleSheet.create({
     color: '#666666',
     fontSize: 12,
   },
+  networkTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 6,
+    marginRight: 36,
+  },
+  networkCustomDnsIcon: {
+    width: 14,
+    height: 14,
+    marginRight: 6,
+    resizeMode: 'contain',
+  },
   networkTitle: {
     fontSize: 12,
     color: '#111111',
     fontWeight: '600',
-    marginBottom: 6,
-    marginRight: 36,
+    flexShrink: 1,
   },
   networkBlock: {
     marginTop: 2,
@@ -1684,10 +1906,10 @@ const styles = StyleSheet.create({
   infoCardFill: {
     flex: 1,
   },
-  systemScrollContent: {
+  settingScrollContent: {
     paddingBottom: 12,
   },
-  proxyControlCard: {
+  settingSectionCard: {
     marginHorizontal: 12,
     marginTop: 12,
     marginBottom: 4,
@@ -1697,24 +1919,52 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     backgroundColor: '#FFFFFF',
   },
-  proxyControlRow: {
+  settingGroupTitle: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#111111',
+    marginBottom: 12,
+  },
+  settingSubSection: {
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  settingSectionHeader: {
     minHeight: 44,
     flexDirection: 'row',
     alignItems: 'center',
   },
-  proxyControlTextWrap: {
+  settingSectionTitleWrap: {
     flex: 1,
     paddingRight: 12,
   },
-  proxyInputSection: {
-    marginTop: 12,
+  settingSectionTitle: {
+    fontSize: 13,
+    color: '#222222',
+    fontWeight: '500',
   },
-  proxyInputLabel: {
-    fontSize: 12,
-    color: '#666666',
-    marginBottom: 6,
+  settingAddButton: {
+    width: 30,
+    height: 30,
+    marginLeft: 10,
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#D0D0D0',
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
   },
-  proxyInput: {
+  settingAddButtonText: {
+    fontSize: 18,
+    color: '#333333',
+    lineHeight: 20,
+  },
+  settingRuleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  settingInput: {
     height: 36,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#D0D0D0',
@@ -1725,10 +1975,23 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     paddingVertical: 0,
   },
-  proxyHintText: {
-    marginTop: 6,
+  settingInputHalf: {
+    flex: 1,
+    marginRight: 8,
+  },
+  settingRowDeleteButton: {
+    minWidth: 36,
+    height: 36,
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#D0D0D0',
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+  },
+  settingRowDeleteButtonText: {
     fontSize: 12,
-    color: '#666666',
+    color: '#333333',
   },
   infoText: {
     fontSize: 13,

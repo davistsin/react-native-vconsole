@@ -1,4 +1,4 @@
-export type VConsoleTab = 'Log' | 'Network' | 'System' | 'App';
+export type VConsoleTab = 'Log' | 'Network' | 'System' | 'Setting' | 'App';
 
 export type LogLevel = 'log' | 'info' | 'warn' | 'error';
 
@@ -17,6 +17,7 @@ export interface NetworkEntry {
   method: string;
   url: string;
   originalUrl?: string;
+  usedCustomDns?: boolean;
   status?: number;
   isError?: boolean;
   errorReason?: string;

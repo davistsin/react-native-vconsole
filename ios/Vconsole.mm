@@ -1,8 +1,14 @@
 #import "Vconsole.h"
+#import "VconsoleNetworkSettings.h"
 #import <UIKit/UIKit.h>
 
 @implementation Vconsole
 RCT_EXPORT_MODULE()
+
++ (void)load
+{
+    [VconsoleNetworkSettings install];
+}
 
 RCT_EXPORT_METHOD(getSystemInfo:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
@@ -47,6 +53,11 @@ RCT_EXPORT_METHOD(getAppInfo:(RCTPromiseResolveBlock)resolve
     } @catch (NSException *exception) {
         reject(@"APP_INFO_ERROR", exception.reason, nil);
     }
+}
+
+RCT_EXPORT_METHOD(setNetworkConfig:(NSDictionary *)config)
+{
+    [VconsoleNetworkSettings updateWithConfig:config ?: @{}];
 }
 
 @end
