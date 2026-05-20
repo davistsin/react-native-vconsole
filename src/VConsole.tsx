@@ -10,6 +10,7 @@ import {
   PanResponder,
   Platform,
   Pressable,
+  Switch,
   TextInput,
   StatusBar,
   StyleSheet,
@@ -34,6 +35,7 @@ import {
   clearNetworkEntries,
   getNetworkEntries,
   installXhrProxy,
+  type NetworkProxyConfig,
   subscribeNetworkEntries,
   uninstallXhrProxy,
 } from './core/xhrProxy';
@@ -76,6 +78,8 @@ export type VConsoleProps = {
   enable?: boolean;
   exclude?: VConsoleExclude;
   autoFollow?: boolean;
+  proxy?: VConsoleProxyConfig;
+  style?: VConsoleFloatingButtonStyle;
 };
 
 type VConsoleExclude = {
@@ -83,8 +87,26 @@ type VConsoleExclude = {
   ip?: boolean;
 };
 
+export type VConsoleProxyConfig = Omit<NetworkProxyConfig, 'enabled'> & {
+  defaultEnable?: boolean;
+};
+
+export type VConsoleFloatingButtonStyle = {
+  width?: number;
+  height?: number;
+  background?: string;
+  color?: string;
+  fontSize?: number;
+};
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
+}
+
+function getPositiveNumber(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value
+    : fallback;
 }
 
 function isNearBottom(event: NativeSyntheticEvent<NativeScrollEvent>): boolean {
@@ -192,6 +214,10 @@ function buildNetworkCopyText(item: NetworkEntry): string {
     `request headers\n${prettyText(item.requestHeaders)}`,
     `request body\n${prettyText(item.requestBody)}`,
   ];
+
+  if (item.originalUrl) {
+    segments.splice(1, 0, `original url ${item.originalUrl}`);
+  }
 
   if (isError) {
     segments.push(
@@ -452,6 +478,11 @@ const NetworkListItem = function NetworkListItem({
         <Text style={styles.networkTitle}>
           {item.method} {item.url}
         </Text>
+        {item.originalUrl ? (
+          <Text style={styles.networkLabel}>
+            Original URL: {item.originalUrl}
+          </Text>
+        ) : null}
         <Text style={styles.networkLabel}>
           Time: {startedTime}
           {'   '}
@@ -551,10 +582,12 @@ function useFlatListRefs() {
 }
 
 function Container(props: VConsoleProps) {
-  const { exclude = EMPTY_EXCLUDE, autoFollow } = props;
+  const { exclude = EMPTY_EXCLUDE, autoFollow, proxy, style } = props;
   const autoFollowEnabled = autoFollow === true;
   const nativeModule = NativeModules.Vconsole as NativeModuleShape | undefined;
   const { width, height } = Dimensions.get('window');
+  const floatingButtonWidth = getPositiveNumber(style?.width, BUTTON_WIDTH);
+  const floatingButtonHeight = getPositiveNumber(style?.height, BUTTON_HEIGHT);
 
   const topInset = Platform.select({
     ios: 44,
@@ -568,11 +601,15 @@ function Container(props: VConsoleProps) {
   });
 
   const minX = 0;
-  const maxX = width - BUTTON_WIDTH;
+  const maxX = width - floatingButtonWidth;
   const minY = topInset;
-  const maxY = height - bottomInset - BUTTON_HEIGHT;
+  const maxY = height - bottomInset - floatingButtonHeight;
 
-  const initialY = clamp(height - bottomInset - BUTTON_HEIGHT - 12, minY, maxY);
+  const initialY = clamp(
+    height - bottomInset - floatingButtonHeight - 12,
+    minY,
+    maxY
+  );
 
   const dragPosition = useRef(
     new Animated.ValueXY({ x: 12, y: initialY })
@@ -593,6 +630,13 @@ function Container(props: VConsoleProps) {
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
+  const [proxyEnabled, setProxyEnabled] = useState(
+    () => proxy?.defaultEnable === true
+  );
+  const [proxyEndpointInput, setProxyEndpointInput] = useState(
+    () => proxy?.endpoint ?? ''
+  );
+  const [proxyEndpointFocused, setProxyEndpointFocused] = useState(false);
 
   const panelHeight = Math.floor(height * PANEL_HEIGHT_RATIO);
   const panelTranslateY = useRef(new Animated.Value(panelHeight)).current;
@@ -636,6 +680,21 @@ function Container(props: VConsoleProps) {
     [exclude.domains]
   );
   const shouldExcludeIp = exclude.ip === true;
+  const normalizedProxyEndpoint = proxyEndpointInput.trim();
+  const panelKeyboardOffset = proxyEndpointFocused ? 0 : keyboardHeight;
+  const hasProxyConfig =
+    !!proxy?.rewriteUrl || normalizedProxyEndpoint.length > 0;
+  const effectiveProxy = useMemo<NetworkProxyConfig | undefined>(() => {
+    return {
+      endpoint: normalizedProxyEndpoint || undefined,
+      headers: proxy?.headers,
+      targetQueryName: proxy?.targetQueryName,
+      includeHosts: proxy?.includeHosts,
+      excludeHosts: proxy?.excludeHosts,
+      rewriteUrl: proxy?.rewriteUrl,
+      enabled: proxyEnabled,
+    };
+  }, [normalizedProxyEndpoint, proxy, proxyEnabled]);
 
   const setLogAutoFollow = useCallback(
     (tab: LogFilterTab, enabled: boolean) => {
@@ -674,6 +733,7 @@ function Container(props: VConsoleProps) {
     installXhrProxy({
       excludeHosts: normalizedExcludeDomains,
       excludeIp: shouldExcludeIp,
+      proxy: effectiveProxy,
     });
 
     const unsubscribeLog = subscribeLogEntries(setLogEntries);
@@ -687,7 +747,7 @@ function Container(props: VConsoleProps) {
       uninstallConsoleProxy();
       uninstallXhrProxy();
     };
-  }, [normalizedExcludeDomains, shouldExcludeIp]);
+  }, [effectiveProxy, normalizedExcludeDomains, shouldExcludeIp]);
 
   useEffect(() => {
     dragPosition.stopAnimation((value) => {
@@ -860,7 +920,9 @@ function Container(props: VConsoleProps) {
       return networkEntries;
     }
     return networkEntries.filter((item) =>
-      item.url.toLowerCase().includes(normalizedNetworkFilter)
+      `${item.url} ${item.originalUrl ?? ''}`
+        .toLowerCase()
+        .includes(normalizedNetworkFilter)
     );
   }, [networkEntries, normalizedNetworkFilter]);
 
@@ -1163,36 +1225,81 @@ function Container(props: VConsoleProps) {
     </View>
   );
 
-  const renderSystemPanel = (visible: boolean) => (
-    <View style={[styles.contentArea, visible ? {} : styles.hidden]}>
-      <View style={styles.infoCard}>
-        <Text style={styles.infoText}>
-          Brand: {systemInfo?.manufacturer ?? '-'}
-        </Text>
-        <Text style={styles.infoText}>Model: {systemInfo?.model ?? '-'}</Text>
-        <Text style={styles.infoText}>
-          System Version: {Platform.OS === 'android' ? 'Android' : 'iOS'}{' '}
-          {systemInfo?.osVersion ?? '-'}
-        </Text>
-        {Platform.OS === 'android' ? (
-          <Text style={styles.infoText}>
-            Network Type: {systemInfo?.networkType ?? '-'}
+  const renderProxyControl = () => (
+    <View style={styles.proxyControlCard}>
+      <View style={styles.proxyControlRow}>
+        <View style={styles.proxyControlTextWrap}>
+          <Text style={styles.infoText}>Proxy</Text>
+          <Text style={styles.infoSubText}>
+            Status: {proxyEnabled ? 'On' : 'Off'}
           </Text>
-        ) : null}
-        {Platform.OS === 'android' ? (
-          <Text style={styles.infoText}>
-            Network Reachable: {systemInfo?.isNetworkReachable ?? 'unknown'}
-          </Text>
-        ) : null}
-        <Text style={styles.infoText}>
-          Total Memory: {formatMemorySize(systemInfo?.totalMemory)}
-        </Text>
-        {Platform.OS === 'android' ? (
-          <Text style={styles.infoText}>
-            Available Memory: {formatMemorySize(systemInfo?.availableMemory)}
+        </View>
+        <Switch
+          value={proxyEnabled}
+          onValueChange={setProxyEnabled}
+          trackColor={{ false: '#D9D9D9', true: '#8DB2FF' }}
+          thumbColor={proxyEnabled ? '#246BFD' : '#FFFFFF'}
+          ios_backgroundColor="#D9D9D9"
+        />
+      </View>
+      <View style={styles.proxyInputSection}>
+        <Text style={styles.proxyInputLabel}>Endpoint</Text>
+        <TextInput
+          style={styles.proxyInput}
+          value={proxyEndpointInput}
+          onChangeText={setProxyEndpointInput}
+          onFocus={() => setProxyEndpointFocused(true)}
+          onBlur={() => setProxyEndpointFocused(false)}
+          placeholder="https://proxy.example.com/debug"
+          placeholderTextColor="#999999"
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+        {!hasProxyConfig ? (
+          <Text style={styles.proxyHintText}>
+            Enter an endpoint or provide `rewriteUrl` from props.
           </Text>
         ) : null}
       </View>
+    </View>
+  );
+
+  const renderSystemPanel = (visible: boolean) => (
+    <View style={[styles.contentArea, visible ? {} : styles.hidden]}>
+      <ScrollView
+        contentContainerStyle={styles.systemScrollContent}
+        keyboardShouldPersistTaps="handled"
+      >
+        {renderProxyControl()}
+        <View style={styles.infoCard}>
+          <Text style={styles.infoText}>
+            Brand: {systemInfo?.manufacturer ?? '-'}
+          </Text>
+          <Text style={styles.infoText}>Model: {systemInfo?.model ?? '-'}</Text>
+          <Text style={styles.infoText}>
+            System Version: {Platform.OS === 'android' ? 'Android' : 'iOS'}{' '}
+            {systemInfo?.osVersion ?? '-'}
+          </Text>
+          {Platform.OS === 'android' ? (
+            <Text style={styles.infoText}>
+              Network Type: {systemInfo?.networkType ?? '-'}
+            </Text>
+          ) : null}
+          {Platform.OS === 'android' ? (
+            <Text style={styles.infoText}>
+              Network Reachable: {systemInfo?.isNetworkReachable ?? 'unknown'}
+            </Text>
+          ) : null}
+          <Text style={styles.infoText}>
+            Total Memory: {formatMemorySize(systemInfo?.totalMemory)}
+          </Text>
+          {Platform.OS === 'android' ? (
+            <Text style={styles.infoText}>
+              Available Memory: {formatMemorySize(systemInfo?.availableMemory)}
+            </Text>
+          ) : null}
+        </View>
+      </ScrollView>
       <View style={styles.actionsRow}>
         {renderActionButton('Hide', closePanel)}
       </View>
@@ -1201,7 +1308,7 @@ function Container(props: VConsoleProps) {
 
   const renderAppPanel = (visible: boolean) => (
     <View style={[styles.contentArea, visible ? {} : styles.hidden]}>
-      <View style={styles.infoCard}>
+      <View style={[styles.infoCard, styles.infoCardFill]}>
         <Text style={styles.infoText}>
           App Version: {appInfo?.appVersion ?? '-'}
         </Text>
@@ -1225,8 +1332,24 @@ function Container(props: VConsoleProps) {
           ]}
           {...panResponder.panHandlers}
         >
-          <View style={styles.floatingButton}>
-            <Text pointerEvents="none" style={styles.floatingButtonText}>
+          <View
+            style={[
+              styles.floatingButton,
+              {
+                width: floatingButtonWidth,
+                height: floatingButtonHeight,
+              },
+              style?.background ? { backgroundColor: style.background } : null,
+            ]}
+          >
+            <Text
+              pointerEvents="none"
+              style={[
+                styles.floatingButtonText,
+                style?.color ? { color: style.color } : null,
+                style?.fontSize ? { fontSize: style.fontSize } : null,
+              ]}
+            >
               vConsole
             </Text>
           </View>
@@ -1243,7 +1366,7 @@ function Container(props: VConsoleProps) {
               styles.panel,
               {
                 height: panelHeight,
-                marginBottom: keyboardHeight,
+                marginBottom: panelKeyboardOffset,
                 transform: [{ translateY: panelTranslateY }],
               },
             ]}
@@ -1272,11 +1395,20 @@ export function VConsole({
   enable = true,
   exclude = EMPTY_EXCLUDE,
   autoFollow = false,
+  proxy,
+  style,
 }: VConsoleProps) {
   if (!enable) {
     return null;
   }
-  return <Container exclude={exclude} autoFollow={autoFollow} />;
+  return (
+    <Container
+      exclude={exclude}
+      autoFollow={autoFollow}
+      proxy={proxy}
+      style={style}
+    />
+  );
 }
 
 const styles = StyleSheet.create({
@@ -1546,13 +1678,66 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   infoCard: {
-    flex: 1,
     paddingHorizontal: 12,
     paddingVertical: 12,
+  },
+  infoCardFill: {
+    flex: 1,
+  },
+  systemScrollContent: {
+    paddingBottom: 12,
+  },
+  proxyControlCard: {
+    marginHorizontal: 12,
+    marginTop: 12,
+    marginBottom: 4,
+    padding: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#E1E1E1',
+    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
+  },
+  proxyControlRow: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  proxyControlTextWrap: {
+    flex: 1,
+    paddingRight: 12,
+  },
+  proxyInputSection: {
+    marginTop: 12,
+  },
+  proxyInputLabel: {
+    fontSize: 12,
+    color: '#666666',
+    marginBottom: 6,
+  },
+  proxyInput: {
+    height: 36,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#D0D0D0',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    fontSize: 12,
+    color: '#222222',
+    backgroundColor: '#FFFFFF',
+    paddingVertical: 0,
+  },
+  proxyHintText: {
+    marginTop: 6,
+    fontSize: 12,
+    color: '#666666',
   },
   infoText: {
     fontSize: 13,
     color: '#222222',
     marginBottom: 8,
+  },
+  infoSubText: {
+    fontSize: 12,
+    color: '#666666',
+    marginBottom: 4,
   },
 });

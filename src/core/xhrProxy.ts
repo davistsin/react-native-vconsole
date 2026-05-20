@@ -1,9 +1,36 @@
 import type { NetworkEntry } from '../types';
 
 type NetworkListener = (entries: NetworkEntry[]) => void;
+
+export type NetworkProxyRewriteRequest = {
+  method: string;
+  url: string;
+};
+
+export type NetworkProxyConfig = {
+  enabled?: boolean;
+  endpoint?: string;
+  headers?: Record<string, string>;
+  targetQueryName?: string;
+  includeHosts?: string[];
+  excludeHosts?: string[];
+  rewriteUrl?: (request: NetworkProxyRewriteRequest) => string | undefined;
+};
+
 type InstallXhrProxyOptions = {
   excludeHosts?: string[];
   excludeIp?: boolean;
+  proxy?: NetworkProxyConfig;
+};
+
+type NormalizedNetworkProxyConfig = {
+  enabled: boolean;
+  endpoint?: string;
+  headers: Record<string, string>;
+  targetQueryName: string;
+  includeHosts: Set<string>;
+  excludeHosts: Set<string>;
+  rewriteUrl?: (request: NetworkProxyRewriteRequest) => string | undefined;
 };
 
 const MAX_NETWORK_COUNT = 500;
@@ -16,6 +43,13 @@ let networkId = 1;
 let OriginalXHR: typeof XMLHttpRequest | undefined;
 let ignoredHosts = new Set<string>();
 let ignoredIpHost = false;
+let activeProxyConfig: NormalizedNetworkProxyConfig = {
+  enabled: false,
+  headers: {},
+  targetQueryName: 'url',
+  includeHosts: new Set<string>(),
+  excludeHosts: new Set<string>(),
+};
 
 function normalizeHosts(hosts?: string[]): Set<string> {
   return new Set(
@@ -108,6 +142,116 @@ function shouldSkipNetworkCapture(rawUrl: string): boolean {
     return false;
   }
   return isIpAddressHostname(hostname);
+}
+
+function normalizeProxyConfig(
+  proxy?: NetworkProxyConfig
+): NormalizedNetworkProxyConfig {
+  return {
+    enabled: proxy?.enabled === true,
+    endpoint: proxy?.endpoint?.trim() || undefined,
+    headers: proxy?.headers ?? {},
+    targetQueryName: proxy?.targetQueryName?.trim() || 'url',
+    includeHosts: normalizeHosts(proxy?.includeHosts),
+    excludeHosts: normalizeHosts(proxy?.excludeHosts),
+    rewriteUrl: proxy?.rewriteUrl,
+  };
+}
+
+function getUrlOriginAndPath(rawUrl: string):
+  | {
+      origin: string;
+      pathname: string;
+    }
+  | undefined {
+  if (!/^https?:\/\//i.test(rawUrl)) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(rawUrl);
+    return {
+      origin: parsed.origin.toLowerCase(),
+      pathname: parsed.pathname,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function isProxyEndpointUrl(rawUrl: string, endpoint?: string): boolean {
+  if (!endpoint) {
+    return false;
+  }
+  const requestTarget = getUrlOriginAndPath(rawUrl);
+  const proxyTarget = getUrlOriginAndPath(endpoint);
+  if (!requestTarget || !proxyTarget) {
+    return false;
+  }
+  return (
+    requestTarget.origin === proxyTarget.origin &&
+    requestTarget.pathname === proxyTarget.pathname
+  );
+}
+
+function shouldProxyRequest(rawUrl: string): boolean {
+  const config = activeProxyConfig;
+  if (!config.enabled || (!config.endpoint && !config.rewriteUrl)) {
+    return false;
+  }
+  if (isProxyEndpointUrl(rawUrl, config.endpoint)) {
+    return false;
+  }
+  const host = getHostFromUrl(rawUrl);
+  if (host && config.excludeHosts.has(host)) {
+    return false;
+  }
+  if (config.includeHosts.size > 0) {
+    return !!host && config.includeHosts.has(host);
+  }
+  return true;
+}
+
+function appendProxyTargetQuery(
+  endpoint: string,
+  targetQueryName: string,
+  originalUrl: string
+): string {
+  const separator = endpoint.includes('?') ? '&' : '?';
+  return `${endpoint}${separator}${encodeURIComponent(
+    targetQueryName
+  )}=${encodeURIComponent(originalUrl)}`;
+}
+
+function getProxyRequestUrl(
+  method: string,
+  originalUrl: string
+): string | undefined {
+  if (!shouldProxyRequest(originalUrl)) {
+    return undefined;
+  }
+  const config = activeProxyConfig;
+  const rewrittenUrl = config.rewriteUrl?.({
+    method,
+    url: originalUrl,
+  });
+  if (rewrittenUrl) {
+    return rewrittenUrl;
+  }
+  if (!config.endpoint) {
+    return undefined;
+  }
+  return appendProxyTargetQuery(
+    config.endpoint,
+    config.targetQueryName,
+    originalUrl
+  );
+}
+
+function getProxyHeaders(): Record<string, string> {
+  if (!activeProxyConfig.enabled) {
+    return {};
+  }
+  return activeProxyConfig.headers;
 }
 
 function getErrorMessage(error: unknown): string | undefined {
@@ -285,6 +429,7 @@ function parseHeaders(rawHeaders?: string | null): Record<string, string> {
 export function installXhrProxy(options?: InstallXhrProxyOptions) {
   ignoredHosts = normalizeHosts(options?.excludeHosts);
   ignoredIpHost = options?.excludeIp === true;
+  activeProxyConfig = normalizeProxyConfig(options?.proxy);
 
   if (isInstalled || typeof XMLHttpRequest === 'undefined') {
     return;
@@ -300,11 +445,14 @@ export function installXhrProxy(options?: InstallXhrProxyOptions) {
     private _requestHeaders: Record<string, string> = {};
     private _method = 'GET';
     private _url = '';
+    private _originalUrl: string | undefined;
 
     open(method: string, url: string, ...rest: unknown[]) {
       this._method = (method || 'GET').toUpperCase();
-      this._url = url;
-      return super.open(method, url, ...(rest as []));
+      const proxiedUrl = getProxyRequestUrl(this._method, url);
+      this._originalUrl = proxiedUrl ? url : undefined;
+      this._url = proxiedUrl ?? url;
+      return super.open(method, this._url, ...(rest as []));
     }
 
     setRequestHeader(header: string, value: string) {
@@ -313,7 +461,18 @@ export function installXhrProxy(options?: InstallXhrProxyOptions) {
     }
 
     send(body?: unknown) {
-      if (shouldSkipNetworkCapture(this._url)) {
+      if (this._originalUrl) {
+        Object.entries(getProxyHeaders()).forEach(([header, value]) => {
+          this._requestHeaders[header] = value;
+          try {
+            super.setRequestHeader(header, value);
+          } catch {
+            // Ignore invalid proxy headers so the original request flow continues.
+          }
+        });
+      }
+
+      if (shouldSkipNetworkCapture(this._originalUrl ?? this._url)) {
         return super.send(body as never);
       }
 
@@ -321,6 +480,7 @@ export function installXhrProxy(options?: InstallXhrProxyOptions) {
         id: networkId++,
         method: this._method,
         url: this._url,
+        originalUrl: this._originalUrl,
         startedAt: Date.now(),
         requestHeaders: { ...this._requestHeaders },
         requestBody: body ?? undefined,
@@ -344,7 +504,7 @@ export function installXhrProxy(options?: InstallXhrProxyOptions) {
 
         // Some internal RN/Metro requests start as relative paths (e.g. /symbolicate).
         // Re-check with responseURL at completion to apply host filters correctly.
-        const finalUrl = this.responseURL || this._url;
+        const finalUrl = this._originalUrl ?? this.responseURL ?? this._url;
         if (shouldSkipNetworkCapture(finalUrl)) {
           const index = entries.findIndex((item) => item.id === this._entryId);
           if (index >= 0) {

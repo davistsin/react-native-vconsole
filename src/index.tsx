@@ -1,7 +1,11 @@
 import { NativeModules, Platform } from 'react-native';
 import { VConsole } from './VConsole';
 import type { AppInfo, SystemInfo } from './types';
-import type { VConsoleProps } from './VConsole';
+import type {
+  VConsoleFloatingButtonStyle,
+  VConsoleProps,
+  VConsoleProxyConfig,
+} from './VConsole';
 
 const LINKING_ERROR =
   `The package 'react-native-vconsole' doesn't seem to be linked. Make sure: \n\n` +
@@ -29,4 +33,10 @@ export function getAppInfo(): Promise<AppInfo> {
 }
 
 export { VConsole };
-export type { AppInfo, SystemInfo, VConsoleProps };
+export type {
+  AppInfo,
+  SystemInfo,
+  VConsoleFloatingButtonStyle,
+  VConsoleProps,
+  VConsoleProxyConfig,
+};
