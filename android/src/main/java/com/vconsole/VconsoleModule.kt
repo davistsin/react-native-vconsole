@@ -12,17 +12,9 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReadableMap
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
-import com.facebook.react.modules.network.NetworkingModule
 
 class VconsoleModule(reactContext: ReactApplicationContext) :
   ReactContextBaseJavaModule(reactContext) {
-
-  override fun initialize() {
-    super.initialize()
-    NetworkingModule.setCustomClientBuilder { builder ->
-      VconsoleNetworkConfig.apply(builder)
-    }
-  }
 
   override fun getName(): String {
     return NAME

@@ -24,10 +24,11 @@ internal data class NetworkConfigState(
   val headerRules: List<HeaderRule> = emptyList(),
 )
 
-internal object VconsoleNetworkConfig {
+object VconsoleNetworkConfig {
   @Volatile
   private var state = NetworkConfigState()
 
+  @JvmStatic
   fun update(config: ReadableMap?) {
     state = NetworkConfigState(
       dnsEnabled = config
@@ -45,6 +46,7 @@ internal object VconsoleNetworkConfig {
     )
   }
 
+  @JvmStatic
   fun apply(builder: OkHttpClient.Builder) {
     val current = state
 

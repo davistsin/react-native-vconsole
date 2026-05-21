@@ -48,6 +48,27 @@ export default function App() {
 }
 ```
 
+## Android Integration
+
+`react-native-vconsole` no longer registers `NetworkingModule.setCustomClientBuilder(...)` automatically on Android.
+If you want `customDNS` and `customHeaders` to affect React Native JS requests on Android, wire the builder in your host app and compose it with any existing logic there.
+
+```kotlin
+import com.facebook.react.modules.network.NetworkingModule
+import com.vconsole.VconsoleNetworkConfig
+
+override fun onCreate() {
+  super.onCreate()
+
+  NetworkingModule.setCustomClientBuilder { builder ->
+    // Keep your app's existing OkHttp customizations here.
+    VconsoleNetworkConfig.apply(builder)
+  }
+}
+```
+
+If your app already uses `NetworkingModule.setCustomClientBuilder(...)`, keep a single registration and call `VconsoleNetworkConfig.apply(builder)` inside that callback instead of registering a second one.
+
 ## VConsole Props
 
 | Prop | Type | Default | Description |
@@ -68,7 +89,7 @@ export default function App() {
 - Log tab supports keyword filter (debounced) across log text content.
 - Network tab captures `XMLHttpRequest` requests/responses without breaking original request behavior.
 - Setting tab lets you toggle and edit `customDNS` and `customHeaders` rows at runtime.
-- Android applies `customDNS` to React Native JS requests through `NetworkingModule`'s `OkHttp` client.
+- Android can apply `customDNS` and `customHeaders` to React Native JS requests when the host app composes `VconsoleNetworkConfig.apply(builder)` into its `NetworkingModule.setCustomClientBuilder(...)` callback.
 - iOS applies `customHeaders` and best-effort host override handling to React Native JS requests through a custom native request chain.
 - Network tab supports `Retry`, which replays a request with the original method/url/headers/body (excluding unsafe forbidden headers).
 - Network tab supports keyword filter (debounced) by request URL.
