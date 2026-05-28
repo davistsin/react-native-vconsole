@@ -299,13 +299,19 @@ didReceiveChallenge:(NSURLAuthenticationChallenge *)challenge
 
   BOOL isTrusted = NO;
   if (@available(iOS 13.0, *)) {
-    NSError *error = nil;
+    CFErrorRef error = NULL;
     isTrusted = SecTrustEvaluateWithError(serverTrust, &error);
+    if (error != NULL) {
+      CFRelease(error);
+    }
   } else {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
     SecTrustResultType result;
     OSStatus status = SecTrustEvaluate(serverTrust, &result);
     isTrusted = status == errSecSuccess &&
         (result == kSecTrustResultProceed || result == kSecTrustResultUnspecified);
+#pragma clang diagnostic pop
   }
 
   if (isTrusted) {
